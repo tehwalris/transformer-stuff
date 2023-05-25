@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cassert>
 #include <immintrin.h>
+#include <fmaintrin.h>
+#include <chrono>
 
 const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32;
 const uint32_t cache_line_bytes = 64;
@@ -181,8 +183,17 @@ int main()
 
   float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
 
-  for (int i_context = 0; i_context < 5; i_context++)
+  auto start_10 = std::chrono::high_resolution_clock::now();
+  for (int i_context = 0; i_context < n_context; i_context++)
   {
+    if (i_context % 10 == 0 && i_context != 0)
+    {
+      auto now = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> elapsed = now - start_10;
+      printf(" time for last 10 of %d iterations: %fs\n", i_context, float(elapsed.count()));
+      start_10 = now;
+    }
+
     printf(".");
     fflush(stdout);
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
