@@ -31,16 +31,20 @@ float _mm256_reduce_add_ps(__m256 v)
 
 float vector_dot_product_fast_n_hidden(float *va, float *vb)
 {
-  assert(n_hidden % 8 == 0);
+  assert(n_hidden % 16 == 0);
 
-  __m256 sum = _mm256_setzero_ps();
-  for (uint32_t i = 0; i < n_hidden; i += 8)
+  __m256 sum_0 = _mm256_setzero_ps();
+  __m256 sum_1 = _mm256_setzero_ps();
+  for (uint32_t i = 0; i < n_hidden; i += 16)
   {
-    __m256 a = _mm256_load_ps(va + i);
-    __m256 b = _mm256_load_ps(vb + i);
-    sum = _mm256_fmadd_ps(a, b, sum);
+    __m256 a_0 = _mm256_load_ps(va + i);
+    __m256 b_0 = _mm256_load_ps(vb + i);
+    __m256 a_1 = _mm256_load_ps(va + i + 8);
+    __m256 b_1 = _mm256_load_ps(vb + i + 8);
+    sum_0 = _mm256_fmadd_ps(a_0, b_0, sum_0);
+    sum_1 = _mm256_fmadd_ps(a_1, b_1, sum_1);
   }
-  return _mm256_reduce_add_ps(sum);
+  return _mm256_reduce_add_ps(_mm256_add_ps(sum_0, sum_1));
 }
 
 void softmax(uint32_t n, float *v)
@@ -123,20 +127,20 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   softmax(n_context, temp_dot_product);
 
   // Calculate the weighted sum of the cached V
-  for (uint32_t offset = 0; offset < n_hidden; offset += 16)
+  for (uint32_t i_context = 0; i_context <= new_i; i_context++)
   {
-    __m256 sum_0 = _mm256_setzero_ps();
-    __m256 sum_1 = _mm256_setzero_ps();
-    for (uint32_t i_context = 0; i_context <= new_i; i_context++)
+    __m256 weight = _mm256_set1_ps(temp_dot_product[i_context]);
+    for (uint32_t i_offset = 0; i_offset < n_hidden; i_offset += 16)
     {
-      float weight = temp_dot_product[i_context];
-      __m256 v_0 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
-      __m256 v_1 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset + 8]);
-      sum_0 = _mm256_fmadd_ps(_mm256_set1_ps(weight), v_0, sum_0);
-      sum_1 = _mm256_fmadd_ps(_mm256_set1_ps(weight), v_1, sum_1);
+      __m256 v_0 = _mm256_load_ps(&cache_v[i_context * n_hidden + i_offset]);
+      __m256 v_1 = _mm256_load_ps(&cache_v[i_context * n_hidden + i_offset + 8]);
+      __m256 out_0 = _mm256_load_ps(&out[i_offset]);
+      __m256 out_1 = _mm256_load_ps(&out[i_offset + 8]);
+      out_0 = _mm256_fmadd_ps(weight, v_0, out_0);
+      out_1 = _mm256_fmadd_ps(weight, v_1, out_1);
+      _mm256_store_ps(&out[i_offset], out_0);
+      _mm256_store_ps(&out[i_offset + 8], out_1);
     }
-    _mm256_store_ps(&out[offset], sum_0);
-    _mm256_store_ps(&out[offset], sum_1);
   }
 }
 
