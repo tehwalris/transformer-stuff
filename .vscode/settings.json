@@ -2,5 +2,6 @@
   "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix",
   "files.associations": {
     "cmath": "cpp"
-  }
+  },
+  "C_Cpp.default.compilerArgs": ["-mavx2", "-mfma"]
 }

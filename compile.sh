@@ -8,5 +8,7 @@ g++ \
   -ldl \
   -O3 \
   -march=native \
+  -mavx2 \
+  -mfma \
   -ffast-math \
   matrix_multiplication.cpp

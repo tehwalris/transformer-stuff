@@ -1,10 +1,13 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cassert>
+#include <immintrin.h>
 
 uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32;
+uint32_t cache_line_bytes = 64;
 
-float vector_dot_product(uint32_t n, float *va, float *vb)
+float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
 {
   float sum = 0.0;
   for (uint32_t i = 0; i < n; i++)
@@ -12,6 +15,30 @@ float vector_dot_product(uint32_t n, float *va, float *vb)
     sum += va[i] * vb[i];
   }
   return sum;
+}
+
+float _mm256_reduce_add_ps(__m256 v)
+{
+  float sum = 0.0;
+  for (uint32_t i = 0; i < 8; i++)
+  {
+    sum += ((float *)&v)[i];
+  }
+  return sum;
+}
+
+float vector_dot_product_fast_n_hidden(float *va, float *vb)
+{
+  assert(n_hidden % 8 == 0);
+
+  __m256 sum = _mm256_setzero_ps();
+  for (uint32_t i = 0; i < n_hidden; i += 8)
+  {
+    __m256 a = _mm256_load_ps(va + i);
+    __m256 b = _mm256_load_ps(vb + i);
+    sum = _mm256_fmadd_ps(a, b, sum);
+  }
+  return _mm256_reduce_add_ps(sum);
 }
 
 void softmax(uint32_t n, float *v)
@@ -31,10 +58,10 @@ void softmax(uint32_t n, float *v)
   }
 }
 
-void step(uint32_t new_i, float *new_q, float *new_k, float *new_v,
-          float *cache_k, float *cache_v,
-          float dot_product_scale, float *temp_dot_product,
-          float *out)
+void step_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v,
+                   float *cache_k, float *cache_v,
+                   float dot_product_scale, float *temp_dot_product,
+                   float *out)
 {
   // Copy the new KV to the cache
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -48,7 +75,7 @@ void step(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   {
     if (i <= new_i)
     {
-      temp_dot_product[i] = dot_product_scale * vector_dot_product(n_hidden, new_q, &cache_k[i * n_hidden]);
+      temp_dot_product[i] = dot_product_scale * vector_dot_product_baseline(n_hidden, new_q, &cache_k[i * n_hidden]);
     }
     else
     {
@@ -73,6 +100,47 @@ void step(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
 }
 
+void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
+               float *cache_k, float *cache_v,
+               float dot_product_scale, float *temp_dot_product,
+               float *out)
+{
+  // Copy the new KV to the cache
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    cache_k[new_i * n_hidden + i] = new_k[i];
+    cache_v[new_i * n_hidden + i] = new_v[i];
+  }
+
+  // Calculate the dot product with each cached K
+  for (uint32_t i = 0; i < n_context; i++)
+  {
+    if (i <= new_i)
+    {
+      temp_dot_product[i] = dot_product_scale * vector_dot_product_fast_n_hidden(new_q, &cache_k[i * n_hidden]);
+    }
+    else
+    {
+      temp_dot_product[i] = 0.0f;
+    }
+  }
+
+  softmax(n_context, temp_dot_product);
+
+  // Calculate the weighted sum of the cached V
+  for (uint32_t offset = 0; offset < n_hidden; offset += 8)
+  {
+    __m256 sum = _mm256_setzero_ps();
+    for (uint32_t i_context = 0; i_context < n_context; i_context++)
+    {
+      float weight = temp_dot_product[i_context];
+      __m256 v = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
+      sum = _mm256_fmadd_ps(_mm256_set1_ps(weight), v, sum);
+    }
+    _mm256_store_ps(&out[offset], sum);
+  }
+}
+
 float rand_float_neg_1_1()
 {
   return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
@@ -82,16 +150,21 @@ int main()
 {
   srand(0);
 
-  float *input_q = new float[n_context * n_hidden];
-  float *input_k = new float[n_context * n_hidden];
-  float *input_v = new float[n_context * n_hidden];
+  assert(cache_line_bytes % (8 * sizeof(float)) == 0);
+  assert(n_context % cache_line_bytes == 0);
+  assert(n_hidden % cache_line_bytes == 0);
 
-  float *output_before_projection = new float[n_context * n_hidden];
+  // allocate aligned to cache lines
+  float *input_q = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
+  float *input_k = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
+  float *input_v = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
 
-  float *cache_k = new float[n_layers * n_context * n_hidden];
-  float *cache_v = new float[n_layers * n_context * n_hidden];
+  float *output_before_projection = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
 
-  float *temp_dot_product = new float[n_context];
+  float *cache_k = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
+  float *cache_v = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
+
+  float *temp_dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
 
   for (int i = 0; i < n_layers * n_context * n_hidden; i++)
   {
@@ -108,17 +181,17 @@ int main()
 
   float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
 
-  for (int i_context = 0; i_context < n_context; i_context++)
+  for (int i_context = 0; i_context < 5; i_context++)
   {
     printf(".");
     fflush(stdout);
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
-      step(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-           &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-           dot_product_scale, temp_dot_product,
-           &output_before_projection[i_context * n_hidden]);
+      step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+                &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                dot_product_scale, temp_dot_product,
+                &output_before_projection[i_context * n_hidden]);
     }
   }
   printf("\n");
