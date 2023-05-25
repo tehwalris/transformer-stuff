@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32;
+uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32;
 
 float vector_dot_product(uint32_t n, float *va, float *vb)
 {
@@ -33,7 +33,7 @@ void softmax(uint32_t n, float *v)
 
 void step(uint32_t new_i, float *new_q, float *new_k, float *new_v,
           float *cache_k, float *cache_v,
-          float *temp_dot_product,
+          float dot_product_scale, float *temp_dot_product,
           float *out)
 {
   // Copy the new KV to the cache
@@ -48,7 +48,7 @@ void step(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   {
     if (i <= new_i)
     {
-      temp_dot_product[i] = vector_dot_product(n_hidden, new_q, &cache_k[i * n_hidden]);
+      temp_dot_product[i] = dot_product_scale * vector_dot_product(n_hidden, new_q, &cache_k[i * n_hidden]);
     }
     else
     {
@@ -106,13 +106,15 @@ int main()
     input_v[i] = rand_float_neg_1_1();
   }
 
+  float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
+
   for (int i = 0; i < n_context; i++)
   {
     printf(".");
     fflush(stdout);
     step(i, &input_q[i * n_hidden], &input_k[i * n_hidden], &input_v[i * n_hidden],
          cache_k, cache_v,
-         temp_dot_product,
+         dot_product_scale, temp_dot_product,
          &output_before_projection[i * n_hidden]);
   }
   printf("\n");
