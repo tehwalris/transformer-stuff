@@ -19,7 +19,7 @@ float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
   return sum;
 }
 
-float _mm256_add_elements_ps(__m256 v)
+float _mm256_reduce_add_ps(__m256 v)
 {
   float sum = 0.0;
   for (uint32_t i = 0; i < 8; i++)
@@ -40,7 +40,7 @@ float vector_dot_product_fast_n_hidden(float *va, float *vb)
     __m256 b = _mm256_load_ps(vb + i);
     sum = _mm256_fmadd_ps(a, b, sum);
   }
-  return _mm256_add_elements_ps(sum);
+  return _mm256_reduce_add_ps(sum);
 }
 
 void softmax(uint32_t n, float *v)
@@ -165,114 +165,23 @@ int main()
 
   float *temp_dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
 
-  for (uint32_t i = 0; i < n_layers * n_context * n_hidden; i++)
+  for (int i = 0; i < n_layers * n_context * n_hidden; i++)
   {
     cache_k[i] = 0.0f;
     cache_v[i] = 0.0f;
   }
 
-  for (uint32_t i = 0; i < n_context * n_hidden; i++)
+  for (int i = 0; i < n_context * n_hidden; i++)
   {
     input_q[i] = rand_float_neg_1_1();
     input_k[i] = rand_float_neg_1_1();
     input_v[i] = rand_float_neg_1_1();
   }
 
-  uint32_t test_size = n_context * n_hidden;
-  uint32_t repetitions = 500;
-  uint32_t warmup_repetitions = 10;
-
-  {
-    auto start = std::chrono::high_resolution_clock::now();
-    float sum = 0.0f;
-
-    for (uint32_t i = 0; i < repetitions + warmup_repetitions; i++)
-    {
-      if (i == warmup_repetitions)
-      {
-        start = std::chrono::high_resolution_clock::now();
-      }
-
-      for (uint32_t j = 0; j < test_size; j++)
-      {
-        sum += input_q[j];
-      }
-    }
-
-    printf("v1 sum: %f\n", sum);
-    auto end = std::chrono::high_resolution_clock::now();
-    printf("time per iteration: %fns\n", double(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()) / double(repetitions));
-    fflush(stdout);
-  }
-
-  {
-    auto start = std::chrono::high_resolution_clock::now();
-    float sum = 0.0f;
-
-    for (uint32_t i = 0; i < repetitions + warmup_repetitions; i++)
-    {
-      if (i == warmup_repetitions)
-      {
-        start = std::chrono::high_resolution_clock::now();
-      }
-
-      __m256 sum_0 = _mm256_setzero_ps();
-      __m256 sum_1 = _mm256_setzero_ps();
-      for (uint32_t j = 0; j < test_size; j += 16)
-      {
-        __m256 v_0 = _mm256_load_ps(&input_q[j]);
-        __m256 v_1 = _mm256_load_ps(&input_q[j + 8]);
-        sum_0 = _mm256_add_ps(sum_0, v_0);
-        sum_1 = _mm256_add_ps(sum_1, v_1);
-      }
-      sum += _mm256_add_elements_ps(_mm256_add_ps(sum_0, sum_1));
-    }
-
-    printf("v2 sum: %f\n", sum);
-    auto end = std::chrono::high_resolution_clock::now();
-    printf("time per iteration: %fns\n", double(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()) / double(repetitions));
-    fflush(stdout);
-  }
-
-  {
-    auto start = std::chrono::high_resolution_clock::now();
-    float sum = 0.0f;
-
-    for (uint32_t i = 0; i < repetitions + warmup_repetitions; i++)
-    {
-      if (i == warmup_repetitions)
-      {
-        start = std::chrono::high_resolution_clock::now();
-      }
-
-      __m256 sum_0 = _mm256_setzero_ps();
-      __m256 sum_1 = _mm256_setzero_ps();
-      __m256 sum_2 = _mm256_setzero_ps();
-      __m256 sum_3 = _mm256_setzero_ps();
-      for (uint32_t j = 0; j < test_size; j += 32)
-      {
-        __m256 v_0 = _mm256_load_ps(&input_q[j]);
-        __m256 v_1 = _mm256_load_ps(&input_q[j + 8]);
-        __m256 v_2 = _mm256_load_ps(&input_q[j + 16]);
-        __m256 v_3 = _mm256_load_ps(&input_q[j + 24]);
-        sum_0 = _mm256_add_ps(sum_0, v_0);
-        sum_1 = _mm256_add_ps(sum_1, v_1);
-        sum_2 = _mm256_add_ps(sum_2, v_2);
-        sum_3 = _mm256_add_ps(sum_3, v_3);
-      }
-      sum += _mm256_add_elements_ps(_mm256_add_ps(_mm256_add_ps(sum_0, sum_1), _mm256_add_ps(sum_2, sum_3)));
-    }
-
-    printf("v3 sum: %f\n", sum);
-    auto end = std::chrono::high_resolution_clock::now();
-    printf("time per iteration: %fns\n", double(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()) / double(repetitions));
-    fflush(stdout);
-  }
-
   float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
 
   auto start_10 = std::chrono::high_resolution_clock::now();
-  for (uint32_t i_context = 0; i_context < n_context; i_context++)
+  for (int i_context = 0; i_context < n_context; i_context++)
   {
     if (i_context % 10 == 0 && i_context != 0)
     {
@@ -288,7 +197,7 @@ int main()
 
     printf(".");
     fflush(stdout);
-    for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
+    for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
       step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
