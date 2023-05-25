@@ -4,8 +4,8 @@
 #include <cassert>
 #include <immintrin.h>
 
-uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32;
-uint32_t cache_line_bytes = 64;
+const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32;
+const uint32_t cache_line_bytes = 64;
 
 float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
 {
@@ -188,10 +188,10 @@ int main()
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
-      step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-                &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-                dot_product_scale, temp_dot_product,
-                &output_before_projection[i_context * n_hidden]);
+      step_baseline(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+                    &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                    dot_product_scale, temp_dot_product,
+                    &output_before_projection[i_context * n_hidden]);
     }
   }
   printf("\n");
