@@ -123,15 +123,20 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   softmax(n_context, temp_dot_product);
 
   // Calculate the weighted sum of the cached V
-  for (uint32_t offset = 0; offset < n_hidden; offset += 8)
+  for (uint32_t offset = 0; offset < n_hidden; offset += 16)
   {
+    __m256 sum_0 = _mm256_setzero_ps();
+    __m256 sum_1 = _mm256_setzero_ps();
     for (uint32_t i_context = 0; i_context <= new_i; i_context++)
     {
       float weight = temp_dot_product[i_context];
-      __m256 v = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
-      sum = _mm256_fmadd_ps(_mm256_set1_ps(weight), v, sum);
+      __m256 v_0 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
+      __m256 v_1 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset + 8]);
+      sum_0 = _mm256_fmadd_ps(_mm256_set1_ps(weight), v_0, sum_0);
+      sum_1 = _mm256_fmadd_ps(_mm256_set1_ps(weight), v_1, sum_1);
     }
-    _mm256_store_ps(&out[offset], sum);
+    _mm256_store_ps(&out[offset], sum_0);
+    _mm256_store_ps(&out[offset], sum_1);
   }
 }
 
