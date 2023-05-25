@@ -108,12 +108,20 @@ int main()
 
   for (int i = 0; i < n_context; i++)
   {
-    printf("i: %d\n", i);
+    printf(".");
+    fflush(stdout);
     step(i, &input_q[i * n_hidden], &input_k[i * n_hidden], &input_v[i * n_hidden],
          cache_k, cache_v,
          temp_dot_product,
          &output_before_projection[i * n_hidden]);
   }
+  printf("\n");
+
+  // print a few of the output values
+  printf("output_before_projection[0 * n_hidden + 0]: %f\n", output_before_projection[0 * n_hidden + 0]);
+  printf("output_before_projection[0 * n_hidden + 1]: %f\n", output_before_projection[0 * n_hidden + 1]);
+  printf("output_before_projection[20 * n_hidden + 6]: %f\n", output_before_projection[20 * n_hidden + 6]);
+  printf("output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]: %f\n", output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]);
 
   return 0;
 }
