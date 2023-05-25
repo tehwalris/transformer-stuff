@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-uint32_t n_hidden = 4096, n_context = 512, n_layers = 32;
+uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32;
 
 float vector_dot_product(uint32_t n, float *va, float *vb)
 {
