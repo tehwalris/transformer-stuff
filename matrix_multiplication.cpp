@@ -187,7 +187,11 @@ int main()
     {
       auto now = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> elapsed = now - start_10;
-      printf(" time for last 10 of %d iterations: %fs (%fus per i_context)\n", i_context, float(elapsed.count()), 1e6f * float(elapsed.count()) / 10.0f / float(i_context));
+      printf(" time for last 10 of %d iterations: %fs; %fus per KV pair and layer; %fMB KV cache per layer\n",
+             i_context,
+             float(elapsed.count()),
+             1e6f * float(elapsed.count()) / 10.0f / float(i_context) / float(n_layers),
+             2 * i_context * n_hidden * sizeof(float) / 1e6f);
       start_10 = now;
     }
 
