@@ -88,12 +88,12 @@ int main()
 
   float *output_before_projection = new float[n_context * n_hidden];
 
-  float *cache_k = new float[n_context * n_hidden];
-  float *cache_v = new float[n_context * n_hidden];
+  float *cache_k = new float[n_layers * n_context * n_hidden];
+  float *cache_v = new float[n_layers * n_context * n_hidden];
 
   float *temp_dot_product = new float[n_context];
 
-  for (int i = 0; i < n_context * n_hidden; i++)
+  for (int i = 0; i < n_layers * n_context * n_hidden; i++)
   {
     cache_k[i] = 0.0f;
     cache_v[i] = 0.0f;
@@ -108,18 +108,21 @@ int main()
 
   float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
 
-  for (int i = 0; i < n_context; i++)
+  for (int i_context = 0; i_context < n_context; i_context++)
   {
     printf(".");
     fflush(stdout);
-    step(i, &input_q[i * n_hidden], &input_k[i * n_hidden], &input_v[i * n_hidden],
-         cache_k, cache_v,
-         dot_product_scale, temp_dot_product,
-         &output_before_projection[i * n_hidden]);
+    for (int i_layer = 0; i_layer < n_layers; i_layer++)
+    {
+      // HACK the inputs should be different for each layer
+      step(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+           &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+           dot_product_scale, temp_dot_product,
+           &output_before_projection[i_context * n_hidden]);
+    }
   }
   printf("\n");
 
-  // print a few of the output values
   printf("output_before_projection[0 * n_hidden + 0]: %f\n", output_before_projection[0 * n_hidden + 0]);
   printf("output_before_projection[0 * n_hidden + 1]: %f\n", output_before_projection[0 * n_hidden + 1]);
   printf("output_before_projection[20 * n_hidden + 6]: %f\n", output_before_projection[20 * n_hidden + 6]);
