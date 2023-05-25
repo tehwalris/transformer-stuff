@@ -127,6 +127,10 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   softmax(n_context, temp_dot_product);
 
   // Calculate the weighted sum of the cached V
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    out[i] = 0.0f;
+  }
   for (uint32_t i_context = 0; i_context <= new_i; i_context++)
   {
     __m256 weight = _mm256_set1_ps(temp_dot_product[i_context]);
@@ -184,19 +188,20 @@ int main()
 
   float dot_product_scale = 1.0f / sqrtf((float)n_hidden / (float)n_heads);
 
-  auto start_10 = std::chrono::high_resolution_clock::now();
+  uint32_t timing_group_size = 50;
+  auto start_group = std::chrono::high_resolution_clock::now();
   for (int i_context = 0; i_context < n_context; i_context++)
   {
-    if (i_context % 10 == 0 && i_context != 0)
+    if (i_context % 50 == 0 && i_context != 0)
     {
       auto now = std::chrono::high_resolution_clock::now();
-      std::chrono::duration<double> elapsed = now - start_10;
-      printf(" time for last 10 of %d iterations: %fs; %fus per KV pair and layer; %fMB KV cache per layer\n",
+      std::chrono::duration<double> elapsed = now - start_group;
+      printf(" time for last 50 of %d iterations: %fs; %fus per KV pair and layer; %fMB KV cache per layer\n",
              i_context,
              float(elapsed.count()),
-             1e6f * float(elapsed.count()) / 10.0f / float(i_context) / float(n_layers),
+             1e6f * float(elapsed.count()) / float(timing_group_size) / float(i_context) / float(n_layers),
              2 * i_context * n_hidden * sizeof(float) / 1e6f);
-      start_10 = now;
+      start_group = now;
     }
 
     printf(".");
