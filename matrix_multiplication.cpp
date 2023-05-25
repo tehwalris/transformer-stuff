@@ -115,16 +115,9 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
 
   // Calculate the dot product with each cached K
-  for (uint32_t i = 0; i < n_context; i++)
+  for (uint32_t i = 0; i <= new_i; i++)
   {
-    if (i <= new_i)
-    {
-      temp_dot_product[i] = dot_product_scale * vector_dot_product_fast_n_hidden(new_q, &cache_k[i * n_hidden]);
-    }
-    else
-    {
-      temp_dot_product[i] = 0.0f;
-    }
+    temp_dot_product[i] = dot_product_scale * vector_dot_product_fast_n_hidden(new_q, &cache_k[i * n_hidden]);
   }
 
   softmax(n_context, temp_dot_product);
@@ -132,8 +125,7 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   // Calculate the weighted sum of the cached V
   for (uint32_t offset = 0; offset < n_hidden; offset += 8)
   {
-    __m256 sum = _mm256_setzero_ps();
-    for (uint32_t i_context = 0; i_context < n_context; i_context++)
+    for (uint32_t i_context = 0; i_context <= new_i; i_context++)
     {
       float weight = temp_dot_product[i_context];
       __m256 v = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
@@ -190,7 +182,7 @@ int main()
     {
       auto now = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> elapsed = now - start_10;
-      printf(" time for last 10 of %d iterations: %fs\n", i_context, float(elapsed.count()));
+      printf(" time for last 10 of %d iterations: %fs (%fus per i_context)\n", i_context, float(elapsed.count()), 1e6f * float(elapsed.count()) / 10.0f / float(i_context));
       start_10 = now;
     }
 
@@ -199,10 +191,10 @@ int main()
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
-      step_baseline(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-                    &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-                    dot_product_scale, temp_dot_product,
-                    &output_before_projection[i_context * n_hidden]);
+      step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+                &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                dot_product_scale, temp_dot_product,
+                &output_before_projection[i_context * n_hidden]);
     }
   }
   printf("\n");
