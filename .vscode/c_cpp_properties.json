@@ -1,28 +1,15 @@
 {
-    "configurations": [
-        {
-            "name": "Linux",
-            "includePath": [
-                "${workspaceFolder}/**"
-            ],
-            "defines": [],
-            "compilerPath": "/nix/store/rj91g41smpmp92xvhx6rjxz6878bn2b4-gcc-wrapper-12.2.0/bin/g++",
-            "cStandard": "gnu17",
-            "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-gcc-x64",
-            "compilerArgs": [
-                "-Wl",
-                "--no-as-needed",
-                "-lpthread",
-                "-lm",
-                "-ldl",
-                "-O3",
-                "-march=native",
-                "-mavx2",
-                "-mfma",
-                "-ffast-math"
-            ]
-        }
-    ],
-    "version": 4
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": ["${workspaceFolder}/**"],
+      "defines": [],
+      "compilerPath": "/nix/store/7wkshj58fcsl1f3zyi67qsxgl1p8nki1-gcc-wrapper-12.2.0/bin/g++",
+      "cStandard": "gnu17",
+      "cppStandard": "gnu++17",
+      "intelliSenseMode": "linux-gcc-x64",
+      "compilerArgs": ["-O3", "-march=native", "-mavx2", "-mfma", "-ffast-math"]
+    }
+  ],
+  "version": 4
 }

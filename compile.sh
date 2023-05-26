@@ -2,10 +2,6 @@
 set -eu
 
 g++ \
-  -Wl,--no-as-needed \
-  -lpthread \
-  -lm \
-  -ldl \
   -O3 \
   -march=native \
   -mavx2 \
