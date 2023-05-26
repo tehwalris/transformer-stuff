@@ -108,6 +108,9 @@ function calculateScenarioSplitLinearAndKv({
   if (nKvCaches < 1) {
     throw new Error("Not enough memory for at least one KV store");
   }
+  if (model.linearWholeBytes > linearDevice.bytes) {
+    throw new Error("Not enough memory for model weights");
+  }
 
   const linearMemoryBoundSeconds =
     model.linearWholeBytes / linearDevice.bytesPerSecond;
@@ -140,12 +143,35 @@ function calculateScenarioSplitLinearAndKv({
   };
 }
 
-const llama7b: ModelArchitecture = {
-  nContext: 512,
-  nEmbedding: 4096,
-  nHeads: 32,
-  nLayers: 32,
-  roughParams: 7e9,
+const llamas: { [size: string]: ModelArchitecture } = {
+  "7b": {
+    nContext: 512,
+    nEmbedding: 4096,
+    nHeads: 32,
+    nLayers: 32,
+    roughParams: 7e9,
+  },
+  "13b": {
+    nContext: 512,
+    nEmbedding: 5120,
+    nHeads: 40,
+    nLayers: 40,
+    roughParams: 13e9,
+  },
+  "33b": {
+    nContext: 512,
+    nEmbedding: 6656,
+    nHeads: 52,
+    nLayers: 60,
+    roughParams: 33e9,
+  },
+  "65b": {
+    nContext: 512,
+    nEmbedding: 8192,
+    nHeads: 64,
+    nLayers: 80,
+    roughParams: 65e9,
+  },
 };
 
 const devices = {
@@ -161,63 +187,72 @@ const devices = {
   },
 };
 
-const configurations: { name: string; calculate: (model: Model) => unknown }[] =
-  [
-    {
-      name: "CPU only alternating",
-      calculate: (model) =>
-        calculateScenarioSingleDeviceAlternating({
-          model,
-          device: devices.cpu,
-        }),
-    },
-    {
-      name: "GPU only alternating",
-      calculate: (model) =>
-        calculateScenarioSingleDeviceAlternating({
-          model,
-          device: devices.gpu,
-        }),
-    },
-    {
-      name: "CPU linear, GPU KV alternating",
-      calculate: (model) =>
-        calculateScenarioSplitLinearAndKv({
-          model,
-          kvDevice: devices.gpu,
-          linearDevice: devices.cpu,
-        }),
-    },
-    {
-      name: "GPU linear, CPU KV alternating",
-      calculate: (model) =>
-        calculateScenarioSplitLinearAndKv({
-          model,
-          kvDevice: devices.cpu,
-          linearDevice: devices.gpu,
-        }),
-    },
-    {
-      name: "Dual GPU alternating",
-      calculate: (model) =>
-        calculateScenarioSplitLinearAndKv({
-          model,
-          kvDevice: devices.gpu,
-          linearDevice: devices.gpu,
-        }),
-    },
-  ];
+const configurations: { name: string; calculate: (model: Model) => {} }[] = [
+  {
+    name: "CPU only alternating",
+    calculate: (model) =>
+      calculateScenarioSingleDeviceAlternating({
+        model,
+        device: devices.cpu,
+      }),
+  },
+  {
+    name: "GPU only alternating",
+    calculate: (model) =>
+      calculateScenarioSingleDeviceAlternating({
+        model,
+        device: devices.gpu,
+      }),
+  },
+  {
+    name: "CPU linear, GPU KV alternating",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKv({
+        model,
+        kvDevice: devices.gpu,
+        linearDevice: devices.cpu,
+      }),
+  },
+  {
+    name: "GPU linear, CPU KV alternating",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKv({
+        model,
+        kvDevice: devices.cpu,
+        linearDevice: devices.gpu,
+      }),
+  },
+  {
+    name: "Dual GPU alternating",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKv({
+        model,
+        kvDevice: devices.gpu,
+        linearDevice: devices.gpu,
+      }),
+  },
+];
 
-for (const bytesPerParam of [1, 2, 4]) {
-  console.log(`bytesPerParam=${bytesPerParam}`);
-
-  const model = new Model(llama7b, bytesPerParam);
-
-  for (const configuration of configurations) {
-    try {
-      console.log(configuration.name, configuration.calculate(model));
-    } catch (e) {
-      console.log(configuration.name, "ERROR", (e as any).message);
+const output: { [model: string]: any } = {};
+for (const [llamaSize, llama] of Object.entries(llamas)) {
+  output[llamaSize] = {};
+  for (const bytesPerParam of [0.5, 1, 2, 4]) {
+    const model = new Model(llama, bytesPerParam);
+    const outputsThisModel: {}[] = [];
+    output[llamaSize][bytesPerParam] = outputsThisModel;
+    for (const configuration of configurations) {
+      try {
+        outputsThisModel.push({
+          configuration: configuration.name,
+          ...configuration.calculate(model),
+        });
+      } catch (e) {
+        outputsThisModel.push({
+          configuration: configuration.name,
+          error: (e as any).message,
+        });
+      }
     }
   }
 }
+console.log(JSON.stringify(output, null, 2));

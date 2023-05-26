@@ -212,7 +212,7 @@ int main()
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
-  for (int i_context = 0; i_context < 5; i_context++)
+  for (int i_context = 0; i_context < n_context; i_context++)
   {
     if (i_context % 50 == 0 && i_context != 0)
     {
