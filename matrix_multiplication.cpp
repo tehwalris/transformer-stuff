@@ -77,15 +77,22 @@ void step_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
 
   // Calculate the dot product with each cached K
-  for (uint32_t i = 0; i < n_context; i++)
+  for (uint32_t i_context = 0; i_context < n_context; i_context++)
   {
-    if (i <= new_i)
+    if (i_context <= new_i)
     {
-      temp_dot_product[i] = dot_product_scale * vector_dot_product_baseline(n_hidden, new_q, &cache_k[i * n_hidden]);
+      for (uint32_t i_head = 0; i_head < n_heads; i_head++)
+      {
+        uint32_t head_offset = i_head * (n_hidden / n_heads);
+        temp_dot_product[i_context * n_heads + i_head] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
+      }
     }
     else
     {
-      temp_dot_product[i] = 0.0f;
+      for (uint32_t i_head = 0; i_head < n_heads; i_head++)
+      {
+        temp_dot_product[i_context * n_heads + i_head] = 0.0f;
+      }
     }
   }
 
@@ -98,10 +105,14 @@ void step_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
   for (uint32_t i_context = 0; i_context < n_context; i_context++)
   {
-    float weight = temp_dot_product[i_context];
-    for (uint32_t i_hidden = 0; i_hidden < n_hidden; i_hidden++)
+    for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
-      out[i_hidden] += weight * cache_v[i_context * n_hidden + i_hidden];
+      float weight = temp_dot_product[i_context * n_heads + i_head];
+      for (uint32_t i_hidden = 0; i_hidden < n_hidden / n_heads; i_hidden++)
+      {
+        uint32_t offset = i_head * (n_hidden / n_heads) + i_hidden;
+        out[offset] += weight * cache_v[i_context * n_hidden + offset];
+      }
     }
   }
 }
@@ -160,6 +171,8 @@ int main()
   assert(cache_line_bytes % (8 * sizeof(float)) == 0);
   assert(n_context % cache_line_bytes == 0);
   assert(n_hidden % cache_line_bytes == 0);
+  assert(n_hidden % cache_line_bytes == 0);
+  assert(n_hidden % n_heads == 0);
 
   // allocate aligned to cache lines
   float *input_q = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
@@ -171,7 +184,7 @@ int main()
   float *cache_k = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
   float *cache_v = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
 
-  float *temp_dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
+  float *temp_dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * n_heads * sizeof(float));
 
   for (int i = 0; i < n_layers * n_context * n_hidden; i++)
   {
@@ -190,7 +203,7 @@ int main()
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
-  for (int i_context = 0; i_context < n_context; i_context++)
+  for (int i_context = 0; i_context < 5; i_context++)
   {
     if (i_context % 50 == 0 && i_context != 0)
     {
@@ -209,16 +222,17 @@ int main()
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
-      step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-                &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-                dot_product_scale, temp_dot_product,
-                &output_before_projection[i_context * n_hidden]);
+      step_baseline(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+                    &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                    dot_product_scale, temp_dot_product,
+                    &output_before_projection[i_context * n_hidden]);
     }
   }
   printf("\n");
 
   printf("output_before_projection[0 * n_hidden + 0]: %f\n", output_before_projection[0 * n_hidden + 0]);
   printf("output_before_projection[0 * n_hidden + 1]: %f\n", output_before_projection[0 * n_hidden + 1]);
+  printf("output_before_projection[0 * n_hidden + (n_hidden - 1)]: %f\n", output_before_projection[0 * n_hidden + (n_hidden - 1)]);
   printf("output_before_projection[20 * n_hidden + 6]: %f\n", output_before_projection[20 * n_hidden + 6]);
   printf("output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]: %f\n", output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]);
 
