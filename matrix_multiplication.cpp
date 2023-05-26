@@ -29,13 +29,14 @@ float _mm256_reduce_add_ps(__m256 v)
   return sum;
 }
 
-float vector_dot_product_fast_n_hidden(float *va, float *vb)
+template <uint32_t n>
+float vector_dot_product_fast(float *va, float *vb)
 {
-  assert(n_hidden % 16 == 0);
+  assert(n % 16 == 0);
 
   __m256 sum_0 = _mm256_setzero_ps();
   __m256 sum_1 = _mm256_setzero_ps();
-  for (uint32_t i = 0; i < n_hidden; i += 16)
+  for (uint32_t i = 0; i < n; i += 16)
   {
     __m256 a_0 = _mm256_load_ps(va + i);
     __m256 b_0 = _mm256_load_ps(vb + i);
@@ -130,9 +131,13 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
 
   // Calculate the dot product with each cached K
-  for (uint32_t i = 0; i <= new_i; i++)
+  for (uint32_t i_context = 0; i_context <= new_i; i_context++)
   {
-    temp_dot_product[i] = dot_product_scale * vector_dot_product_fast_n_hidden(new_q, &cache_k[i * n_hidden]);
+    for (uint32_t i_head = 0; i_head < n_heads; i_head++)
+    {
+      uint32_t head_offset = i_head * (n_hidden / n_heads);
+      temp_dot_product[i_context * n_heads + i_head] = dot_product_scale * vector_dot_product_fast<n_hidden / n_heads>(&new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
+    }
   }
 
   softmax(n_context, temp_dot_product);
@@ -144,17 +149,21 @@ void step_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
   for (uint32_t i_context = 0; i_context <= new_i; i_context++)
   {
-    __m256 weight = _mm256_set1_ps(temp_dot_product[i_context]);
-    for (uint32_t i_offset = 0; i_offset < n_hidden; i_offset += 16)
+    for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
-      __m256 v_0 = _mm256_load_ps(&cache_v[i_context * n_hidden + i_offset]);
-      __m256 v_1 = _mm256_load_ps(&cache_v[i_context * n_hidden + i_offset + 8]);
-      __m256 out_0 = _mm256_load_ps(&out[i_offset]);
-      __m256 out_1 = _mm256_load_ps(&out[i_offset + 8]);
-      out_0 = _mm256_fmadd_ps(weight, v_0, out_0);
-      out_1 = _mm256_fmadd_ps(weight, v_1, out_1);
-      _mm256_store_ps(&out[i_offset], out_0);
-      _mm256_store_ps(&out[i_offset + 8], out_1);
+      __m256 weight = _mm256_set1_ps(temp_dot_product[i_context * n_heads + i_head]);
+      for (uint32_t i_hidden = 0; i_hidden < n_hidden / n_heads; i_hidden += 16)
+      {
+        uint32_t offset = i_head * (n_hidden / n_heads) + i_hidden;
+        __m256 v_0 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset]);
+        __m256 v_1 = _mm256_load_ps(&cache_v[i_context * n_hidden + offset + 8]);
+        __m256 out_0 = _mm256_load_ps(&out[offset]);
+        __m256 out_1 = _mm256_load_ps(&out[offset + 8]);
+        out_0 = _mm256_fmadd_ps(weight, v_0, out_0);
+        out_1 = _mm256_fmadd_ps(weight, v_1, out_1);
+        _mm256_store_ps(&out[offset], out_0);
+        _mm256_store_ps(&out[offset + 8], out_1);
+      }
     }
   }
 }
@@ -222,10 +231,10 @@ int main()
     for (int i_layer = 0; i_layer < n_layers; i_layer++)
     {
       // HACK the inputs should be different for each layer
-      step_baseline(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-                    &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-                    dot_product_scale, temp_dot_product,
-                    &output_before_projection[i_context * n_hidden]);
+      step_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
+                &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                dot_product_scale, temp_dot_product,
+                &output_before_projection[i_context * n_hidden]);
     }
   }
   printf("\n");
