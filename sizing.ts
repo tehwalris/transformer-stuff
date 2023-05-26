@@ -274,6 +274,16 @@ function calculateScenarioSplitLinearAndKvInterleaved({
   const totalSeconds =
     Math.max(linearSecondsA, kvCacheSecondsB) +
     Math.max(linearSecondsB, kvCacheSecondsA);
+
+  const interleavingEfficiency =
+    (Math.min(linearSecondsA, kvCacheSecondsB) +
+      Math.min(linearSecondsB, kvCacheSecondsA)) /
+    totalSeconds;
+  const interleavingBoundReason =
+    (linearSecondsA > kvCacheSecondsB ? "linear" : "kv") +
+    "-" +
+    (linearSecondsB > kvCacheSecondsA ? "linear" : "kv");
+
   const tokensPerSecondSequential = 1 / totalSeconds;
   const tokensPerSecondParallel = nKvCachesTotal / totalSeconds;
 
@@ -293,6 +303,8 @@ function calculateScenarioSplitLinearAndKvInterleaved({
     kvCacheSecondsA,
     kvCacheSecondsB,
     totalSeconds,
+    interleavingEfficiency,
+    interleavingBoundReason,
     tokensPerSecondSequential,
     tokensPerSecondParallel,
   };
@@ -404,6 +416,28 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
         model,
         kvDevice: devices.gpu,
         kvDeviceCount: 1,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "2 GPU linear, 1 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 1,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 2,
+      }),
+  },
+  {
+    name: "1 GPU linear, 2 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 2,
         linearDevice: devices.gpu,
         linearDeviceCount: 1,
       }),
