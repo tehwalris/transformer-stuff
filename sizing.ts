@@ -51,7 +51,9 @@ function calculateScenarioSingleDeviceAlternating({
   model: Model;
   device: Device;
 }) {
-  // Store model weights and KV stores in device (eg. CPU) memory. For each KV store, perform one layer of attention. Take the outputs and run the linear parts of the model batched. Repeat for all layers.
+  // Store model weights and KV stores in device (eg. CPU) memory. For each KV
+  // store, perform one layer of attention. Take the outputs and run the linear
+  // parts of the model batched. Repeat for all layers.
 
   const nKvCaches = Math.floor(
     (device.bytes - model.linearWholeBytes) / model.kvCacheWholeBytes
@@ -93,7 +95,7 @@ function calculateScenarioSingleDeviceAlternating({
   };
 }
 
-function calculateScenarioSplitLinearAndKv({
+function calculateScenarioSplitLinearAndKvAlternating({
   model,
   kvDevice,
   linearDevice,
@@ -102,7 +104,10 @@ function calculateScenarioSplitLinearAndKv({
   kvDevice: Device;
   linearDevice: Device;
 }) {
-  // Store model weights on one device (e.g. CPU) and KV stores on another (e.g. GPU). For each KV store, perform one layer of attention. Send the outputs to the other device and run the linear parts of the model batched. Repeat for all layers. At any time, one of the devices is idle.
+  // Store model weights on one device (e.g. CPU) and KV stores on another (e.g.
+  // GPU). For each KV store, perform one layer of attention. Send the outputs
+  // to the other device and run the linear parts of the model batched. Repeat
+  // for all layers. At any time, one of the devices is idle.
 
   const nKvCaches = Math.floor(kvDevice.bytes / model.kvCacheWholeBytes);
   if (nKvCaches < 1) {
@@ -137,6 +142,87 @@ function calculateScenarioSplitLinearAndKv({
     linearSeconds,
     linearBoundReason,
     kvCacheSeconds,
+    totalSeconds,
+    tokensPerSecondSequential,
+    tokensPerSecondParallel,
+  };
+}
+
+function calculateScenarioSplitLinearAndKvInterleaved({
+  model,
+  kvDevice,
+  linearDevice,
+}: {
+  model: Model;
+  kvDevice: Device;
+  linearDevice: Device;
+}) {
+  // Store model weights on one device (e.g. CPU) and KV stores on another (e.g.
+  // GPU). For half of the KV stores, perform one layer of attention. Send the
+  // outputs to the other device and run the linear parts of the model batched.
+  // In the meantime perform attention for the remaining KV stores. Repeat for
+  // all layers. If the linear layers take exactly as long as attention, then
+  // both devices will always be busy.
+
+  const nKvCachesTotal = Math.floor(kvDevice.bytes / model.kvCacheWholeBytes);
+  if (nKvCachesTotal < 2) {
+    throw new Error("Not enough memory for at least two KV stores");
+  }
+  const nKvCachesA = Math.floor(nKvCachesTotal / 2);
+  const nKvCachesB = nKvCachesTotal - nKvCachesA;
+  if (nKvCachesA < 1 || nKvCachesB < 1) {
+    throw new Error("Splitting KV stores failed");
+  }
+  if (model.linearWholeBytes > linearDevice.bytes) {
+    throw new Error("Not enough memory for model weights");
+  }
+
+  const linearMemoryBoundSeconds =
+    model.linearWholeBytes / linearDevice.bytesPerSecond;
+  const linearComputeBoundSecondsA =
+    (nKvCachesA * model.linearFlopsDirty) / linearDevice.flopsDirty;
+  const linearComputeBoundSecondsB =
+    (nKvCachesB * model.linearFlopsDirty) / linearDevice.flopsDirty;
+  const linearSecondsA = Math.max(
+    linearMemoryBoundSeconds,
+    linearComputeBoundSecondsA
+  );
+  const linearBoundReasonA =
+    linearMemoryBoundSeconds > linearComputeBoundSecondsA
+      ? "memory"
+      : "compute";
+  const linearSecondsB = Math.max(
+    linearMemoryBoundSeconds,
+    linearComputeBoundSecondsB
+  );
+  const linearBoundReasonB =
+    linearMemoryBoundSeconds > linearComputeBoundSecondsB
+      ? "memory"
+      : "compute";
+
+  const kvCacheSecondsA =
+    (nKvCachesA * model.kvCacheWholeBytes) / kvDevice.bytesPerSecond;
+  const kvCacheSecondsB =
+    (nKvCachesB * model.kvCacheWholeBytes) / kvDevice.bytesPerSecond;
+
+  const totalSeconds =
+    Math.max(linearSecondsA, kvCacheSecondsB) +
+    Math.max(linearSecondsB, kvCacheSecondsA);
+  const tokensPerSecondSequential = 1 / totalSeconds;
+  const tokensPerSecondParallel = nKvCachesTotal / totalSeconds;
+
+  return {
+    nKvCachesA,
+    nKvCachesB,
+    linearMemoryBoundSeconds,
+    linearComputeBoundSecondsA,
+    linearComputeBoundSecondsB,
+    linearSecondsA,
+    linearSecondsB,
+    linearBoundReasonA,
+    linearBoundReasonB,
+    kvCacheSecondsA,
+    kvCacheSecondsB,
     totalSeconds,
     tokensPerSecondSequential,
     tokensPerSecondParallel,
@@ -207,7 +293,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
   {
     name: "CPU linear, GPU KV alternating",
     calculate: (model) =>
-      calculateScenarioSplitLinearAndKv({
+      calculateScenarioSplitLinearAndKvAlternating({
         model,
         kvDevice: devices.gpu,
         linearDevice: devices.cpu,
@@ -216,7 +302,16 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
   {
     name: "GPU linear, CPU KV alternating",
     calculate: (model) =>
-      calculateScenarioSplitLinearAndKv({
+      calculateScenarioSplitLinearAndKvAlternating({
+        model,
+        kvDevice: devices.cpu,
+        linearDevice: devices.gpu,
+      }),
+  },
+  {
+    name: "GPU linear, CPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
         model,
         kvDevice: devices.cpu,
         linearDevice: devices.gpu,
@@ -225,7 +320,16 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
   {
     name: "Dual GPU alternating",
     calculate: (model) =>
-      calculateScenarioSplitLinearAndKv({
+      calculateScenarioSplitLinearAndKvAlternating({
+        model,
+        kvDevice: devices.gpu,
+        linearDevice: devices.gpu,
+      }),
+  },
+  {
+    name: "Dual GPU interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
         model,
         kvDevice: devices.gpu,
         linearDevice: devices.gpu,
