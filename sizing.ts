@@ -356,7 +356,7 @@ const devices = {
 
 const configurations: { name: string; calculate: (model: Model) => {} }[] = [
   {
-    name: "CPU only alternating",
+    name: "1 CPU alternating",
     calculate: (model) =>
       calculateScenarioSingleDeviceAlternating({
         model,
@@ -364,7 +364,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "GPU only alternating",
+    name: "1 GPU alternating",
     calculate: (model) =>
       calculateScenarioSingleDeviceAlternating({
         model,
@@ -372,7 +372,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "CPU linear, GPU KV alternating",
+    name: "1 CPU linear, 1 GPU KV alternating",
     calculate: (model) =>
       calculateScenarioSplitLinearAndKvAlternating({
         model,
@@ -381,7 +381,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "GPU linear, CPU KV alternating",
+    name: "1 GPU linear, 1 CPU KV alternating",
     calculate: (model) =>
       calculateScenarioSplitLinearAndKvAlternating({
         model,
@@ -390,7 +390,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "GPU linear, CPU KV interleaved",
+    name: "1 GPU linear, 1 CPU KV interleaved",
     calculate: (model) =>
       calculateScenarioSplitLinearAndKvInterleaved({
         model,
@@ -401,7 +401,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "Dual GPU alternating",
+    name: "2 GPU alternating",
     calculate: (model) =>
       calculateScenarioSplitLinearAndKvAlternating({
         model,
@@ -410,7 +410,7 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
       }),
   },
   {
-    name: "Dual GPU interleaved",
+    name: "1 GPU linear, 1 GPU KV interleaved",
     calculate: (model) =>
       calculateScenarioSplitLinearAndKvInterleaved({
         model,
@@ -440,6 +440,154 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
         kvDeviceCount: 2,
         linearDevice: devices.gpu,
         linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "1 GPU linear, 3 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 3,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "2 GPU linear, 3 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 3,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 2,
+      }),
+  },
+  {
+    name: "2 GPU linear (acting like 1; splitting each matrix 2 ways), 3 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 3,
+        linearDevice: {
+          bytes: devices.gpu.bytes * 2,
+          bytesPerSecond: devices.gpu.bytesPerSecond * 2,
+          flopsDirty: devices.gpu.flopsDirty * 2,
+        },
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "5 GPU linear, 1 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 1,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "5 GPU linear, 8 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 8,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "5 GPU linear, 16 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 16,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "5 GPU linear (acting like 1; splitting each matrix 5 ways), 16 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 16,
+        linearDevice: {
+          bytes: devices.gpu.bytes * 5,
+          bytesPerSecond: devices.gpu.bytesPerSecond * 5,
+          flopsDirty: devices.gpu.flopsDirty * 5,
+        },
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "5 GPU linear (acting like 1; splitting each matrix 5 ways), 4 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 4,
+        linearDevice: {
+          bytes: devices.gpu.bytes * 5,
+          bytesPerSecond: devices.gpu.bytesPerSecond * 5,
+          flopsDirty: devices.gpu.flopsDirty * 5,
+        },
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "10 GPU linear (acting like 1; splitting each matrix 10 ways), 4 GPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.gpu,
+        kvDeviceCount: 4,
+        linearDevice: {
+          bytes: devices.gpu.bytes * 10,
+          bytesPerSecond: devices.gpu.bytesPerSecond * 10,
+          flopsDirty: devices.gpu.flopsDirty * 10,
+        },
+        linearDeviceCount: 1,
+      }),
+  },
+  {
+    name: "5 GPU linear, 1 CPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.cpu,
+        kvDeviceCount: 1,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "5 GPU linear, 10 CPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.cpu,
+        kvDeviceCount: 10,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "5 GPU linear, 45 CPU KV interleaved",
+    calculate: (model) =>
+      calculateScenarioSplitLinearAndKvInterleaved({
+        model,
+        kvDevice: devices.cpu,
+        kvDeviceCount: 45,
+        linearDevice: devices.gpu,
+        linearDeviceCount: 5,
       }),
   },
 ];
