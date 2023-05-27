@@ -352,6 +352,16 @@ const devices = {
     bytesPerSecond: 450e9,
     flopsDirty: 81e12 / 2, // "Tensor Compute" from Wikipedia, assuming 2 per FMA
   },
+  a100_40: {
+    bytes: 40e9,
+    bytesPerSecond: 1555e9,
+    flopsDirty: 312e12, // "INT8 Tensor Core" (non-sparse) from Nvidia's website, assuming 2 per FMA
+  },
+  a100_80: {
+    bytes: 80e9,
+    bytesPerSecond: 1935e9,
+    flopsDirty: 312e12, // "INT8 Tensor Core" (non-sparse) from Nvidia's website, assuming 2 per FMA
+  },
 };
 
 const configurations: { name: string; calculate: (model: Model) => {} }[] = [
@@ -588,6 +598,22 @@ const configurations: { name: string; calculate: (model: Model) => {} }[] = [
         kvDeviceCount: 45,
         linearDevice: devices.gpu,
         linearDeviceCount: 5,
+      }),
+  },
+  {
+    name: "1 A100 40GB alternating",
+    calculate: (model) =>
+      calculateScenarioSingleDeviceAlternating({
+        model,
+        device: devices.a100_40,
+      }),
+  },
+  {
+    name: "1 A100 80GB alternating",
+    calculate: (model) =>
+      calculateScenarioSingleDeviceAlternating({
+        model,
+        device: devices.a100_80,
       }),
   },
 ];
