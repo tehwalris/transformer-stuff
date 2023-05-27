@@ -91,17 +91,28 @@ void softmax(uint32_t n, float *v)
   }
 }
 
+uint8_t to_quantized(float x)
+{
+  // range [-1, 1]
+  return uint8_t(std::round((x + 1.0f) * 255.0f / 2.0f));
+}
+
+float from_quantized(uint8_t x)
+{
+  return float(x) * 2.0f / 255.0f - 1.0f;
+}
+
 // Multiply an m x n matrix with an n element vector and store the result in an m element vector.
 // The matrix is stored in row-major order.
 template <uint32_t m, uint32_t n>
-void matrix_vector_multiply(float *mat_in, float *vec_in, float *vec_out)
+void matrix_vector_multiply_quantized(uint8_t *mat_in, float *vec_in, float *vec_out)
 {
   for (uint32_t i = 0; i < m; i++)
   {
     float sum = 0.0;
     for (uint32_t j = 0; j < n; j++)
     {
-      sum += mat_in[i * n + j] * vec_in[j];
+      sum += from_quantized(mat_in[i * n + j]) * vec_in[j];
     }
     vec_out[i] = sum;
   }
@@ -234,24 +245,23 @@ void attention_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
 
 struct TransformerLayerWeights
 {
-  float *token_embeddings; // n_vocab * n_hidden
-  float *q;                // n_hidden * n_hidden
-  float *k;                // n_hidden * n_hidden
-  float *v;                // n_hidden * n_hidden
-  float *o;                // n_hidden * n_hidden
-  float *l1;               // n_ff * n_hidden
-  float *l2;               // n_ff * n_hidden
-  float *l3;               // n_hidden * n_ff
-  float *attention_norm;   // n_hidden
-  float *ff_norm;          // n_hidden
+  uint8_t *q;            // n_hidden * n_hidden
+  uint8_t *k;            // n_hidden * n_hidden
+  uint8_t *v;            // n_hidden * n_hidden
+  uint8_t *o;            // n_hidden * n_hidden
+  uint8_t *l1;           // n_ff * n_hidden
+  uint8_t *l2;           // n_ff * n_hidden
+  uint8_t *l3;           // n_hidden * n_ff
+  float *attention_norm; // n_hidden
+  float *ff_norm;        // n_hidden
 };
 
 struct TransformerWholeWeights
 {
   TransformerLayerWeights *layers; // n_layers
-  float *token_embeddings;         // n_vocab * n_hidden
+  uint8_t *token_embeddings;       // n_vocab * n_hidden
   float *model_norm;               // n_hidden
-  float *output_layer;             // n_hidden * n_vocab
+  uint8_t *output_layer;           // n_hidden * n_vocab
 };
 
 struct TempBaseline
@@ -285,19 +295,19 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   }
 
   // Compute Q, K, V
-  matrix_vector_multiply<n_hidden, n_hidden>(w.q, new_hidden, temp.q);
-  matrix_vector_multiply<n_hidden, n_hidden>(w.k, new_hidden, temp.k);
-  matrix_vector_multiply<n_hidden, n_hidden>(w.v, new_hidden, temp.v);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.q, new_hidden, temp.q);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.k, new_hidden, temp.k);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.v, new_hidden, temp.v);
 
   // Apply RoPE
   apply_rope(new_i, temp.q);
   apply_rope(new_i, temp.k);
 
   // Attention
-  attention_fast(new_i, temp.q, temp.k, temp.v, cache_k, cache_v, temp.dot_product, temp.attention_result);
+  attention_baseline(new_i, temp.q, temp.k, temp.v, cache_k, cache_v, temp.dot_product, temp.attention_result);
 
   // Projection and residual
-  matrix_vector_multiply<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
     temp.o[i] += temp.norm_residual[i];
@@ -311,13 +321,13 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   }
 
   // Feed forward
-  matrix_vector_multiply<n_ff, n_hidden>(w.l1, temp.o, temp.l1);
-  matrix_vector_multiply<n_ff, n_hidden>(w.l3, temp.o, temp.l3);
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l1, temp.o, temp.l1);
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l3, temp.o, temp.l3);
   for (uint32_t i = 0; i < n_ff; i++)
   {
     temp.l3[i] *= silu(temp.l1[i]);
   }
-  matrix_vector_multiply<n_hidden, n_ff>(w.l2, temp.l3, temp.l2);
+  matrix_vector_multiply_quantized<n_hidden, n_ff>(w.l2, temp.l3, temp.l2);
 
   // Residual
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -351,12 +361,21 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
   }
 
   rms_norm<n_hidden>(last_layer_embedding_out, temp.model_norm);
-  matrix_vector_multiply<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
+  matrix_vector_multiply_quantized<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
 }
 
 float rand_float_neg_1_1()
 {
   return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
+}
+
+void fill_rand_uint8(uint8_t *arr, uint32_t n)
+{
+  assert(n % 4 == 0);
+  for (uint32_t i = 0; i < n; i += 4)
+  {
+    *((uint32_t *)(void *)(arr + i)) = rand();
+  }
 }
 
 int main()
@@ -371,30 +390,50 @@ int main()
 
   TransformerWholeWeights weights;
   weights.layers = (TransformerLayerWeights *)aligned_alloc(cache_line_bytes, n_layers * sizeof(TransformerLayerWeights));
-  for (int i = 0; i < n_layers; i++)
+  for (uint32_t i = 0; i < n_layers; i++)
   {
-    weights.layers[i].token_embeddings = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
-    weights.layers[i].q = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
-    weights.layers[i].k = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
-    weights.layers[i].v = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
-    weights.layers[i].o = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
-    weights.layers[i].l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(float));
-    weights.layers[i].l2 = (float *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(float));
-    weights.layers[i].l3 = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_ff * sizeof(float));
+    weights.layers[i].q = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
+    weights.layers[i].k = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
+    weights.layers[i].v = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
+    weights.layers[i].o = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
+    weights.layers[i].l1 = (uint8_t *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(uint8_t));
+    weights.layers[i].l2 = (uint8_t *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(uint8_t));
+    weights.layers[i].l3 = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_ff * sizeof(uint8_t));
     weights.layers[i].attention_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
     weights.layers[i].ff_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   }
-  weights.token_embeddings = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
+  weights.token_embeddings = (uint8_t *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(uint8_t));
   weights.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  weights.output_layer = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
+  weights.output_layer = (uint8_t *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(uint8_t));
 
-  // TODO init weights
+  for (uint32_t i = 0; i < n_layers; i++)
+  {
+    fill_rand_uint8(weights.layers[i].q, n_hidden * n_hidden);
+    fill_rand_uint8(weights.layers[i].k, n_hidden * n_hidden);
+    fill_rand_uint8(weights.layers[i].v, n_hidden * n_hidden);
+    fill_rand_uint8(weights.layers[i].o, n_hidden * n_hidden);
+    fill_rand_uint8(weights.layers[i].l1, n_ff * n_hidden);
+    fill_rand_uint8(weights.layers[i].l1, n_ff * n_hidden);
+    fill_rand_uint8(weights.layers[i].l1, n_hidden * n_ff);
+    for (uint32_t j = 0; j < n_hidden; j++)
+    {
+      weights.layers[i].attention_norm[j] = rand_float_neg_1_1();
+      weights.layers[i].ff_norm[j] = rand_float_neg_1_1();
+    }
+  }
+  fill_rand_uint8(weights.token_embeddings, n_vocab * n_hidden);
+  fill_rand_uint8(weights.output_layer, n_vocab * n_hidden);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    weights.model_norm[i] = rand_float_neg_1_1();
+  }
 
   TempBaseline temp;
   temp.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
   temp.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.attention_result = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.k = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
@@ -413,6 +452,9 @@ int main()
     cache_k[i] = 0.0f;
     cache_v[i] = 0.0f;
   }
+
+  printf("Initialized\n");
+  fflush(stdout);
 
   uint32_t last_token = 1;
 
@@ -433,6 +475,11 @@ int main()
     }
 
     transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
+
+    for (uint32_t i = 0; i < n_vocab; i++)
+    {
+      printf("%f ", token_probs[i]);
+    }
 
     last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
     printf("%d ", last_token);
