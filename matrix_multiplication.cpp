@@ -62,7 +62,7 @@ void rms_norm(float *in, float *out)
     sum += in[i] * in[i];
   }
 
-  float scale = 1.0f / std::sqrtf(sum / float(n) + eps);
+  float scale = 1.0f / std::sqrt(sum / float(n) + eps);
   for (uint32_t i = 0; i < n; i++)
   {
     out[i] = in[i] * scale;
@@ -369,31 +369,52 @@ int main()
   assert(n_hidden % cache_line_bytes == 0);
   assert(n_hidden % n_heads == 0);
 
-  float *input_embeddings = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
+  TransformerWholeWeights weights;
+  weights.layers = (TransformerLayerWeights *)aligned_alloc(cache_line_bytes, n_layers * sizeof(TransformerLayerWeights));
+  for (int i = 0; i < n_layers; i++)
+  {
+    weights.layers[i].token_embeddings = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
+    weights.layers[i].q = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
+    weights.layers[i].k = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
+    weights.layers[i].v = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
+    weights.layers[i].o = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(float));
+    weights.layers[i].l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(float));
+    weights.layers[i].l2 = (float *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(float));
+    weights.layers[i].l3 = (float *)aligned_alloc(cache_line_bytes, n_hidden * n_ff * sizeof(float));
+    weights.layers[i].attention_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+    weights.layers[i].ff_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  }
+  weights.token_embeddings = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
+  weights.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  weights.output_layer = (float *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(float));
 
-  float *input_q = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
-  float *input_k = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
-  float *input_v = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
+  // TODO init weights
 
-  float *output_before_projection = (float *)aligned_alloc(cache_line_bytes, n_context * n_hidden * sizeof(float));
+  TempBaseline temp;
+  temp.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
+  temp.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.k = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.o = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp.l2 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp.l3 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+
+  float *token_probs = (float *)aligned_alloc(cache_line_bytes, n_vocab * sizeof(float));
 
   float *cache_k = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
   float *cache_v = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
-
-  float *temp_dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * n_heads * sizeof(float));
-
   for (int i = 0; i < n_layers * n_context * n_hidden; i++)
   {
     cache_k[i] = 0.0f;
     cache_v[i] = 0.0f;
   }
 
-  for (int i = 0; i < n_context * n_hidden; i++)
-  {
-    input_q[i] = rand_float_neg_1_1();
-    input_k[i] = rand_float_neg_1_1();
-    input_v[i] = rand_float_neg_1_1();
-  }
+  uint32_t last_token = 1;
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
@@ -411,24 +432,13 @@ int main()
       start_group = now;
     }
 
-    printf(".");
+    transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
+
+    last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+    printf("%d ", last_token);
     fflush(stdout);
-    for (int i_layer = 0; i_layer < n_layers; i_layer++)
-    {
-      // HACK the inputs should be different for each layer
-      attention_fast(i_context, &input_q[i_context * n_hidden], &input_k[i_context * n_hidden], &input_v[i_context * n_hidden],
-                     &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
-                     temp_dot_product,
-                     &output_before_projection[i_context * n_hidden]);
-    }
   }
   printf("\n");
-
-  printf("output_before_projection[0 * n_hidden + 0]: %f\n", output_before_projection[0 * n_hidden + 0]);
-  printf("output_before_projection[0 * n_hidden + 1]: %f\n", output_before_projection[0 * n_hidden + 1]);
-  printf("output_before_projection[0 * n_hidden + (n_hidden - 1)]: %f\n", output_before_projection[0 * n_hidden + (n_hidden - 1)]);
-  printf("output_before_projection[20 * n_hidden + 6]: %f\n", output_before_projection[20 * n_hidden + 6]);
-  printf("output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]: %f\n", output_before_projection[(n_context - 1) * n_hidden + (n_hidden - 1)]);
 
   return 0;
 }
