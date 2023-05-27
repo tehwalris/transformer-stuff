@@ -6,7 +6,7 @@
 #include <fmaintrin.h>
 #include <chrono>
 
-const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32, n_ff_multiple = 256;
+const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32, n_ff_multiple = 256, n_vocab = 32000;
 const uint32_t cache_line_bytes = 64;
 
 const uint32_t n_ff = ((2 * (4 * n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
@@ -232,63 +232,126 @@ void attention_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   }
 }
 
+struct TransformerLayerWeights
+{
+  float *token_embeddings; // n_vocab * n_hidden
+  float *q;                // n_hidden * n_hidden
+  float *k;                // n_hidden * n_hidden
+  float *v;                // n_hidden * n_hidden
+  float *o;                // n_hidden * n_hidden
+  float *l1;               // n_ff * n_hidden
+  float *l2;               // n_ff * n_hidden
+  float *l3;               // n_hidden * n_ff
+  float *attention_norm;   // n_hidden
+  float *ff_norm;          // n_hidden
+};
+
+struct TransformerWholeWeights
+{
+  TransformerLayerWeights *layers; // n_layers
+  float *token_embeddings;         // n_vocab * n_hidden
+  float *model_norm;               // n_hidden
+  float *output_layer;             // n_hidden * n_vocab
+};
+
+struct TempBaseline
+{
+  float *embedding_0;      // n_hidden
+  float *embedding_1;      // n_hidden
+  float *dot_product;      // n_context
+  float *norm_residual;    // n_hidden
+  float *attention_result; // n_hidden
+  float *q;                // n_hidden
+  float *k;                // n_hidden
+  float *v;                // n_hidden
+  float *o;                // n_hidden
+  float *l1;               // n_ff
+  float *l2;               // n_ff
+  float *l3;               // n_hidden
+  float *model_norm;       // n_hidden
+};
+
 void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
-                                float *weights_q, float *weights_k, float *weights_v, float *weights_o,
-                                float *weights_l1, float *weights_l2, float *weights_l3,
-                                float *weights_attention_norm, float *weights_ffn_norm,
+                                TransformerLayerWeights &w,
                                 float *cache_k, float *cache_v,
-                                float *temp_dot_product, float *temp_norm_residual, float *temp_attention_result,
-                                float *temp_q, float *temp_k, float *temp_v, float *temp_o,
-                                float *temp_l1, float *temp_l2, float *temp_l3,
+                                TempBaseline &temp,
                                 float *out)
 {
   // Norm before attention
-  rms_norm<n_hidden>(new_hidden, temp_norm_residual);
+  rms_norm<n_hidden>(new_hidden, temp.norm_residual);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    temp_norm_residual[i] *= weights_attention_norm[i];
+    temp.norm_residual[i] *= w.attention_norm[i];
   }
 
   // Compute Q, K, V
-  matrix_vector_multiply<n_hidden, n_hidden>(weights_q, new_hidden, temp_q);
-  matrix_vector_multiply<n_hidden, n_hidden>(weights_k, new_hidden, temp_k);
-  matrix_vector_multiply<n_hidden, n_hidden>(weights_v, new_hidden, temp_v);
+  matrix_vector_multiply<n_hidden, n_hidden>(w.q, new_hidden, temp.q);
+  matrix_vector_multiply<n_hidden, n_hidden>(w.k, new_hidden, temp.k);
+  matrix_vector_multiply<n_hidden, n_hidden>(w.v, new_hidden, temp.v);
 
   // Apply RoPE
-  apply_rope(new_i, temp_q);
-  apply_rope(new_i, temp_k);
+  apply_rope(new_i, temp.q);
+  apply_rope(new_i, temp.k);
 
   // Attention
-  attention_fast(new_i, temp_q, temp_k, temp_v, cache_k, cache_v, temp_dot_product, temp_attention_result);
+  attention_fast(new_i, temp.q, temp.k, temp.v, cache_k, cache_v, temp.dot_product, temp.attention_result);
 
   // Projection and residual
-  matrix_vector_multiply<n_hidden, n_hidden>(weights_o, temp_attention_result, temp_o);
+  matrix_vector_multiply<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    temp_o[i] += temp_norm_residual[i];
+    temp.o[i] += temp.norm_residual[i];
   }
 
   // Norm before feed forward
-  rms_norm<n_hidden>(temp_o, temp_norm_residual);
+  rms_norm<n_hidden>(temp.o, temp.norm_residual);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    temp_norm_residual[i] *= weights_ffn_norm[i];
+    temp.norm_residual[i] *= w.ff_norm[i];
   }
 
   // Feed forward
-  matrix_vector_multiply<n_ff, n_hidden>(weights_l1, temp_o, temp_l1);
-  matrix_vector_multiply<n_ff, n_hidden>(weights_l3, temp_o, temp_l3);
+  matrix_vector_multiply<n_ff, n_hidden>(w.l1, temp.o, temp.l1);
+  matrix_vector_multiply<n_ff, n_hidden>(w.l3, temp.o, temp.l3);
   for (uint32_t i = 0; i < n_ff; i++)
   {
-    temp_l3[i] *= silu(temp_l1[i]);
+    temp.l3[i] *= silu(temp.l1[i]);
   }
-  matrix_vector_multiply<n_hidden, n_ff>(weights_l2, temp_l3, temp_l2);
+  matrix_vector_multiply<n_hidden, n_ff>(w.l2, temp.l3, temp.l2);
 
   // Residual
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    out[i] = temp_l2[i] + temp_norm_residual[i];
+    out[i] = temp.l2[i] + temp.norm_residual[i];
   }
+}
+
+void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
+                                TransformerWholeWeights &w,
+                                float *cache_k, float *cache_v,
+                                TempBaseline &temp,
+                                float *out)
+{
+  float *embedding_in = temp.embedding_0;
+  float *embedding_out = temp.embedding_1;
+  float *last_layer_embedding_out = nullptr;
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    embedding_in[i] = w.token_embeddings[new_i * n_hidden + i];
+  }
+
+  for (uint32_t i_layer; i_layer < n_layers; i_layer++)
+  {
+    transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
+
+    last_layer_embedding_out = embedding_out;
+    float *temp = embedding_in;
+    embedding_in = embedding_out;
+    embedding_out = temp;
+  }
+
+  rms_norm<n_hidden>(last_layer_embedding_out, temp.model_norm);
+  matrix_vector_multiply<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
 }
 
 float rand_float_neg_1_1()

@@ -1,3 +1,16 @@
 {
-  "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix"
+  "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix",
+  "files.associations": {
+    "*.tcc": "cpp",
+    "algorithm": "cpp",
+    "memory": "cpp",
+    "random": "cpp",
+    "iosfwd": "cpp",
+    "iostream": "cpp",
+    "istream": "cpp",
+    "numeric": "cpp",
+    "ostream": "cpp",
+    "sstream": "cpp",
+    "streambuf": "cpp"
+  }
 }
