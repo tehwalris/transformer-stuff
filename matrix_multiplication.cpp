@@ -249,19 +249,22 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
       for (uint32_t i_head = 0; i_head < n_heads; i_head++)
       {
         uint32_t head_offset = i_head * (n_hidden / n_heads);
-        temp_dot_product[i_context * n_heads + i_head] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
+        temp_dot_product[i_head * n_context + i_context] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
       }
     }
     else
     {
       for (uint32_t i_head = 0; i_head < n_heads; i_head++)
       {
-        temp_dot_product[i_context * n_heads + i_head] = 0.0f;
+        temp_dot_product[i_head * n_context + i_context] = -INFINITY;
       }
     }
   }
 
-  softmax(n_context, temp_dot_product);
+  for (uint32_t i = 0; i < n_heads; i++)
+  {
+    softmax(n_context, &temp_dot_product[i * n_context]);
+  }
 
   // Calculate the weighted sum of the cached V
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -272,7 +275,7 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
   {
     for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
-      float weight = temp_dot_product[i_context * n_heads + i_head];
+      float weight = temp_dot_product[i_head * n_context + i_context];
       for (uint32_t i_hidden = 0; i_hidden < n_hidden / n_heads; i_hidden++)
       {
         uint32_t offset = i_head * (n_hidden / n_heads) + i_hidden;
@@ -357,7 +360,7 @@ struct TempBaseline
 {
   float *embedding_0;      // n_hidden
   float *embedding_1;      // n_hidden
-  float *dot_product;      // n_context
+  float *dot_product;      // n_heads * n_context
   float *norm_residual;    // n_hidden
   float *attention_result; // n_hidden
   float *q;                // n_hidden
@@ -389,13 +392,6 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.k, temp.norm_residual, temp.k);
   matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.v, temp.norm_residual, temp.v);
 
-  for (uint32_t i = 0; i < 10; i++)
-  {
-    printf("%f ", temp.q[i]);
-  }
-  printf("\n");
-  fflush(stdout);
-
   // Apply RoPE
   apply_rope(new_i, temp.q);
   apply_rope(new_i, temp.k);
@@ -407,7 +403,7 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    temp.o[i] += temp.norm_residual[i];
+    temp.o[i] += new_hidden[i];
   }
 
   // Norm before feed forward
@@ -418,8 +414,8 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   }
 
   // Feed forward
-  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l1, temp.o, temp.l1);
-  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l3, temp.o, temp.l3);
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l1, temp.norm_residual, temp.l1);
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l3, temp.norm_residual, temp.l3);
   for (uint32_t i = 0; i < n_ff; i++)
   {
     temp.l3[i] *= silu(temp.l1[i]);
@@ -429,7 +425,7 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   // Residual
   for (uint32_t i = 0; i < n_hidden; i++)
   {
-    out[i] = temp.l2[i] + temp.norm_residual[i];
+    out[i] = temp.l2[i] + temp.o[i];
   }
 }
 
@@ -596,7 +592,7 @@ int main(int argc, char **argv)
   TempBaseline temp;
   temp.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.dot_product = (float *)aligned_alloc(cache_line_bytes, n_context * sizeof(float));
+  temp.dot_product = (float *)aligned_alloc(cache_line_bytes, n_heads * n_context * sizeof(float));
   temp.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.attention_result = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
@@ -621,7 +617,7 @@ int main(int argc, char **argv)
   printf("Initialized\n");
   fflush(stdout);
 
-  uint32_t last_token = 27;
+  uint32_t last_token = 1;
 
   {
     int llama_cpp_input_token = int(last_token);
