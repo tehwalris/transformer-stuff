@@ -78,8 +78,6 @@ float silu(float x)
 
 void softmax(uint32_t n, float *v)
 {
-  // TODO check implementation (Copilot generated it)
-
   float max = *std::max_element(v, v + n);
   float sum = 0.0;
   for (uint32_t i = 0; i < n; i++)
@@ -93,81 +91,6 @@ void softmax(uint32_t n, float *v)
   }
 }
 
-static inline float fp32_from_bits(uint32_t w)
-{
-  union
-  {
-    uint32_t as_bits;
-    float as_value;
-  } fp32;
-  fp32.as_bits = w;
-  return fp32.as_value;
-}
-
-static inline uint32_t fp32_to_bits(float f)
-{
-  union
-  {
-    float as_value;
-    uint32_t as_bits;
-  } fp32;
-  fp32.as_value = f;
-  return fp32.as_bits;
-}
-
-static inline float compute_fp16_to_fp32(uint16_t h)
-{
-  const uint32_t w = (uint32_t)h << 16;
-  const uint32_t sign = w & UINT32_C(0x80000000);
-  const uint32_t two_w = w + w;
-
-  const uint32_t exp_offset = UINT32_C(0xE0) << 23;
-  const float exp_scale = 0x1.0p-112f;
-  const float normalized_value = fp32_from_bits((two_w >> 4) + exp_offset) * exp_scale;
-
-  const uint32_t magic_mask = UINT32_C(126) << 23;
-  const float magic_bias = 0.5f;
-  const float denormalized_value = fp32_from_bits((two_w >> 17) | magic_mask) - magic_bias;
-
-  const uint32_t denormalized_cutoff = UINT32_C(1) << 27;
-  const uint32_t result = sign |
-                          (two_w < denormalized_cutoff ? fp32_to_bits(denormalized_value) : fp32_to_bits(normalized_value));
-  return fp32_from_bits(result);
-}
-
-static inline uint16_t compute_fp32_to_fp16(float f)
-{
-  const float scale_to_inf = 0x1.0p+112f;
-  const float scale_to_zero = 0x1.0p-110f;
-  float base = (fabsf(f) * scale_to_inf) * scale_to_zero;
-
-  const uint32_t w = fp32_to_bits(f);
-  const uint32_t shl1_w = w + w;
-  const uint32_t sign = w & UINT32_C(0x80000000);
-  uint32_t bias = shl1_w & UINT32_C(0xFF000000);
-  if (bias < UINT32_C(0x71000000))
-  {
-    bias = UINT32_C(0x71000000);
-  }
-
-  base = fp32_from_bits((bias >> 1) + UINT32_C(0x07800000)) + base;
-  const uint32_t bits = fp32_to_bits(base);
-  const uint32_t exp_bits = (bits >> 13) & UINT32_C(0x00007C00);
-  const uint32_t mantissa_bits = bits & UINT32_C(0x00000FFF);
-  const uint32_t nonsign = exp_bits + mantissa_bits;
-  return (sign >> 16) | (shl1_w > UINT32_C(0xFF000000) ? UINT16_C(0x7E00) : nonsign);
-}
-
-static float table_f32_f16[1 << 16];
-
-void init_table_f32_f16()
-{
-  for (int i = 0; i < (1 << 16); ++i)
-  {
-    table_f32_f16[i] = compute_fp16_to_fp32(i);
-  }
-}
-
 // Same format that llama.cpp uses
 #define QK8_0 32
 typedef struct
@@ -178,7 +101,7 @@ typedef struct
 
 static void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
 {
-  float d = table_f32_f16[quantized->d];
+  float d = ggml_fp16_to_fp32(quantized->d);
   for (int j = 0; j < QK8_0; ++j)
   {
     output[j] = float(quantized->qs[j]) * d;
@@ -197,7 +120,7 @@ void matrix_vector_multiply_quantized(block_q8_0 *mat_in, float *vec_in, float *
     for (uint32_t i_col = 0; i_col < n; i_col += QK8_0)
     {
       float block[QK8_0];
-      from_quantized_block_q8_0((&mat_in[(i_row * n + i_col) / QK8_0]), block);
+      from_quantized_block_q8_0(&mat_in[(i_row * n + i_col) / QK8_0], block);
       for (uint32_t i_offset = 0; i_offset < QK8_0; i_offset++)
       {
         sum += block[i_offset] * vec_in[i_col + i_offset];
@@ -485,7 +408,7 @@ void fill_rand_int8(int8_t *arr)
 
 void rand_block_q8_0(block_q8_0 *block, float scale)
 {
-  block->d = compute_fp32_to_fp16(scale);
+  block->d = ggml_fp32_to_fp16(scale);
   fill_rand_int8<QK8_0>(block->qs);
 }
 
@@ -570,8 +493,6 @@ int main(int argc, char **argv)
   char *model_path = argv[1];
 
   srand(0);
-
-  init_table_f32_f16();
 
   assert(cache_line_bytes % (8 * sizeof(float)) == 0);
   assert(n_context % cache_line_bytes == 0);

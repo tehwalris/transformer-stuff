@@ -58,5 +58,6 @@
     "stop_token": "cpp",
     "thread": "cpp",
     "typeinfo": "cpp"
-  }
+  },
+  "cSpell.words": ["ggml"]
 }
