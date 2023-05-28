@@ -452,7 +452,6 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
 
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
-    printf("Layer %d\n", i_layer);
     transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
 
     last_layer_embedding_out = embedding_out;
@@ -619,13 +618,6 @@ int main(int argc, char **argv)
 
   uint32_t last_token = 1;
 
-  {
-    int llama_cpp_input_token = int(last_token);
-    llama_eval(lctx, &llama_cpp_input_token, 1, 0, 1);
-    float *logits = llama_get_logits(lctx);
-    printf("Expected logits: %f %f\n", logits[0], logits[1]);
-  }
-
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
   for (uint32_t i_context = 0; i_context < n_context; i_context++)
@@ -642,13 +634,18 @@ int main(int argc, char **argv)
       start_group = now;
     }
 
+    {
+      int llama_cpp_input_token = int(last_token);
+      llama_eval(lctx, &llama_cpp_input_token, 1, i_context, 1);
+      float *logits = llama_get_logits(lctx);
+      uint32_t token = uint32_t(std::max_element(logits, logits + n_vocab) - logits);
+      printf("Expected: logits %f %f token %d\n", logits[0], logits[1], token);
+    }
+
     transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
-
-    printf("Actual logits: %f %f\n", token_probs[0], token_probs[1]);
-    fflush(stdout);
-
     last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
-    printf("Token %d\n", last_token);
+
+    printf("Actual: logits %f %f token %d\n", token_probs[0], token_probs[1], last_token);
     fflush(stdout);
   }
   printf("\n");
