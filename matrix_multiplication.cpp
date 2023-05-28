@@ -291,8 +291,8 @@ struct TempBaseline
   float *v;                // n_hidden
   float *o;                // n_hidden
   float *l1;               // n_ff
-  float *l2;               // n_ff
-  float *l3;               // n_hidden
+  float *l2;               // n_hidden
+  float *l3;               // n_ff
   float *model_norm;       // n_hidden
 };
 
@@ -520,8 +520,8 @@ int main(int argc, char **argv)
   temp.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.o = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp.l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
-  temp.l2 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
-  temp.l3 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.l2 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
   temp.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
 
   float *token_probs = (float *)aligned_alloc(cache_line_bytes, n_vocab * sizeof(float));
