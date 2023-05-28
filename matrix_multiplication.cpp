@@ -12,7 +12,7 @@ const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32, n
 const uint32_t cache_line_bytes = 64;
 
 const uint32_t n_ff = ((2 * (4 * n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
-const float dot_product_scale = 1.0f / std::sqrt(n_hidden / n_heads);
+const float dot_product_scale = 1.0f / std::sqrt(float(n_hidden) / float(n_heads));
 
 float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
 {
