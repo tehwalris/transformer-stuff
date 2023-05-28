@@ -537,7 +537,20 @@ int main(int argc, char **argv)
   printf("Initialized\n");
   fflush(stdout);
 
-  uint32_t last_token = 1;
+  const uint32_t max_input_tokens = 1000;
+  std::string input_string = " How are you doing";
+  llama_token input_tokens[max_input_tokens];
+  uint32_t n_input_tokens = llama_tokenize(lctx, input_string.c_str(), input_tokens, max_input_tokens, true);
+  assert(n_input_tokens >= 1);
+
+  for (uint32_t i = 0; i < n_input_tokens; i++)
+  {
+    printf("\"%s\" ", llama_token_to_str(lctx, input_tokens[i]));
+  }
+  printf("\n");
+  fflush(stdout);
+
+  llama_token last_token = 1;
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
@@ -555,19 +568,20 @@ int main(int argc, char **argv)
       start_group = now;
     }
 
-    {
-      int llama_cpp_input_token = int(last_token);
-      llama_eval(lctx, &llama_cpp_input_token, 1, i_context, 1);
-      float *logits = llama_get_logits(lctx);
-      uint32_t token = uint32_t(std::max_element(logits, logits + n_vocab) - logits);
-      printf("Expected: logits %f %f token %d\n", logits[0], logits[1], token);
-    }
+    llama_token input_token = i_context < n_input_tokens ? input_tokens[i_context] : last_token;
 
-    transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
-    last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+    llama_eval(lctx, &input_token, 1, i_context, 1);
+    float *expected_logits = llama_get_logits(lctx);
+    llama_token expected_token = uint32_t(std::max_element(expected_logits, expected_logits + n_vocab) - expected_logits);
+    printf("Expected: logits %f %f token \"%s\" (%d)\n", expected_logits[0], expected_logits[1], llama_token_to_str(lctx, expected_token), expected_token);
 
-    printf("Actual: logits %f %f token %d\n", token_probs[0], token_probs[1], last_token);
+    transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp, token_probs);
+    llama_token actual_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+
+    printf("Actual: logits %f %f token \"%s\" (%d)\n", token_probs[0], token_probs[1], llama_token_to_str(lctx, actual_token), actual_token);
     fflush(stdout);
+
+    last_token = expected_token;
   }
   printf("\n");
 
