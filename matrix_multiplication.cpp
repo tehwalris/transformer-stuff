@@ -378,15 +378,23 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
 {
   // Norm before attention
   rms_norm<n_hidden>(new_hidden, temp.norm_residual);
+
   for (uint32_t i = 0; i < n_hidden; i++)
   {
     temp.norm_residual[i] *= w.attention_norm[i];
   }
 
   // Compute Q, K, V
-  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.q, new_hidden, temp.q);
-  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.k, new_hidden, temp.k);
-  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.v, new_hidden, temp.v);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.q, temp.norm_residual, temp.q);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.k, temp.norm_residual, temp.k);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.v, temp.norm_residual, temp.v);
+
+  for (uint32_t i = 0; i < 10; i++)
+  {
+    printf("%f ", temp.q[i]);
+  }
+  printf("\n");
+  fflush(stdout);
 
   // Apply RoPE
   apply_rope(new_i, temp.q);
@@ -448,15 +456,8 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
 
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
+    printf("Layer %d\n", i_layer);
     transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
-
-    printf("Layer %d\n embedding_out ", i_layer);
-    for (uint32_t i = 0; i < 10; i++)
-    {
-      printf("%f ", embedding_out[i]);
-    }
-    printf("\n");
-    fflush(stdout);
 
     last_layer_embedding_out = embedding_out;
     float *temp = embedding_in;
@@ -514,7 +515,7 @@ block_q8_0 *block_q8_0_ptr_from_ggml_tensor(ggml_tensor *t)
   return (block_q8_0 *)(void *)t->data;
 }
 
-TransformerWholeWeights load_llama_model(char *model_path)
+llama_context *load_llama_model(char *model_path, TransformerWholeWeights *weights)
 {
   auto lparams = llama_context_default_params();
   lparams.n_ctx = n_context;
@@ -526,7 +527,7 @@ TransformerWholeWeights load_llama_model(char *model_path)
   lparams.logits_all = false;
   lparams.embedding = false;
   lparams.vocab_only = false;
-  lparams.model_ony = true;
+  lparams.model_ony = false;
 
   llama_context *lctx = llama_init_from_file(model_path, lparams);
   llama_model *model = llama_get_model(lctx);
@@ -538,11 +539,10 @@ TransformerWholeWeights load_llama_model(char *model_path)
   assert(model->hparams.n_head == n_heads);
   assert(model->hparams.n_layer == n_layers);
 
-  TransformerWholeWeights weights;
-  weights.layers = new TransformerLayerWeights[n_layers];
+  weights->layers = new TransformerLayerWeights[n_layers];
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
-    TransformerLayerWeights &out_layer = weights.layers[i_layer];
+    TransformerLayerWeights &out_layer = weights->layers[i_layer];
     llama_layer &in_layer = model->layers[i_layer];
 
     out_layer.attention_norm = float_ptr_from_ggml_tensor(in_layer.attention_norm);
@@ -558,11 +558,11 @@ TransformerWholeWeights load_llama_model(char *model_path)
     out_layer.l3 = block_q8_0_ptr_from_ggml_tensor(in_layer.w3);
   }
 
-  weights.token_embeddings = (block_q8_0 *)model->tok_embeddings->data;
-  weights.model_norm = (float *)model->norm->data;
-  weights.output_layer = (block_q8_0 *)model->output->data;
+  weights->token_embeddings = (block_q8_0 *)model->tok_embeddings->data;
+  weights->model_norm = (float *)model->norm->data;
+  weights->output_layer = (block_q8_0 *)model->output->data;
 
-  return weights;
+  return lctx;
 }
 
 int main(int argc, char **argv)
@@ -587,7 +587,8 @@ int main(int argc, char **argv)
   assert(n_context % QK8_0 == 0);
 
   llama_init_backend();
-  TransformerWholeWeights weights = load_llama_model(model_path);
+  TransformerWholeWeights weights;
+  llama_context *lctx = load_llama_model(model_path, &weights);
 
   printf("Loaded model\n");
   fflush(stdout);
@@ -620,7 +621,14 @@ int main(int argc, char **argv)
   printf("Initialized\n");
   fflush(stdout);
 
-  uint32_t last_token = 1;
+  uint32_t last_token = 27;
+
+  {
+    int llama_cpp_input_token = int(last_token);
+    llama_eval(lctx, &llama_cpp_input_token, 1, 0, 1);
+    float *logits = llama_get_logits(lctx);
+    printf("Expected logits: %f %f\n", logits[0], logits[1]);
+  }
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
@@ -640,11 +648,7 @@ int main(int argc, char **argv)
 
     transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
 
-    for (uint32_t i = 0; i < 10; i++)
-    {
-      printf("%f ", token_probs[i]);
-    }
-    printf("\n");
+    printf("Actual logits: %f %f\n", token_probs[0], token_probs[1]);
     fflush(stdout);
 
     last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
