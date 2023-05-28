@@ -375,7 +375,11 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
 
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
-    transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
+    transformer_layer_baseline(new_i, embedding_in,
+                               w.layers[i_layer],
+                               &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                               temp,
+                               embedding_out);
 
     last_layer_embedding_out = embedding_out;
     float *temp = embedding_in;
