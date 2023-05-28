@@ -450,6 +450,14 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
   {
     transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
 
+    printf("Layer %d\n embedding_out ", i_layer);
+    for (uint32_t i = 0; i < 10; i++)
+    {
+      printf("%f ", embedding_out[i]);
+    }
+    printf("\n");
+    fflush(stdout);
+
     last_layer_embedding_out = embedding_out;
     float *temp = embedding_in;
     embedding_in = embedding_out;
@@ -457,6 +465,10 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
   }
 
   rms_norm<n_hidden>(last_layer_embedding_out, temp.model_norm);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    temp.model_norm[i] *= w.model_norm[i];
+  }
   matrix_vector_multiply_quantized<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
 }
 
@@ -490,6 +502,18 @@ void fill_rand_block_q8_0(block_q8_0 *block, uint32_t n, float scale)
   }
 }
 
+float *float_ptr_from_ggml_tensor(ggml_tensor *t)
+{
+  assert(t->type == GGML_TYPE_F32);
+  return (float *)(void *)t->data;
+}
+
+block_q8_0 *block_q8_0_ptr_from_ggml_tensor(ggml_tensor *t)
+{
+  assert(t->type == GGML_TYPE_Q8_0);
+  return (block_q8_0 *)(void *)t->data;
+}
+
 TransformerWholeWeights load_llama_model(char *model_path)
 {
   auto lparams = llama_context_default_params();
@@ -518,19 +542,20 @@ TransformerWholeWeights load_llama_model(char *model_path)
   weights.layers = new TransformerLayerWeights[n_layers];
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
-    auto &layer = weights.layers[i_layer];
+    TransformerLayerWeights &out_layer = weights.layers[i_layer];
+    llama_layer &in_layer = model->layers[i_layer];
 
-    layer.attention_norm = (float *)(model->layers[i_layer].attention_norm->data);
-    layer.ff_norm = (float *)model->layers[i_layer].ffn_norm->data;
+    out_layer.attention_norm = float_ptr_from_ggml_tensor(in_layer.attention_norm);
+    out_layer.ff_norm = float_ptr_from_ggml_tensor(in_layer.ffn_norm);
 
-    layer.q = (block_q8_0 *)model->layers[i_layer].wq->data;
-    layer.k = (block_q8_0 *)model->layers[i_layer].wk->data;
-    layer.v = (block_q8_0 *)model->layers[i_layer].wv->data;
-    layer.o = (block_q8_0 *)model->layers[i_layer].wo->data;
+    out_layer.q = block_q8_0_ptr_from_ggml_tensor(in_layer.wq);
+    out_layer.k = block_q8_0_ptr_from_ggml_tensor(in_layer.wk);
+    out_layer.v = block_q8_0_ptr_from_ggml_tensor(in_layer.wv);
+    out_layer.o = block_q8_0_ptr_from_ggml_tensor(in_layer.wo);
 
-    layer.l1 = (block_q8_0 *)model->layers[i_layer].w1->data;
-    layer.l2 = (block_q8_0 *)model->layers[i_layer].w2->data;
-    layer.l3 = (block_q8_0 *)model->layers[i_layer].w3->data;
+    out_layer.l1 = block_q8_0_ptr_from_ggml_tensor(in_layer.w1);
+    out_layer.l2 = block_q8_0_ptr_from_ggml_tensor(in_layer.w2);
+    out_layer.l3 = block_q8_0_ptr_from_ggml_tensor(in_layer.w3);
   }
 
   weights.token_embeddings = (block_q8_0 *)model->tok_embeddings->data;
@@ -615,8 +640,15 @@ int main(int argc, char **argv)
 
     transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
 
+    for (uint32_t i = 0; i < 10; i++)
+    {
+      printf("%f ", token_probs[i]);
+    }
+    printf("\n");
+    fflush(stdout);
+
     last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
-    printf("%d ", last_token);
+    printf("Token %d\n", last_token);
     fflush(stdout);
   }
   printf("\n");
