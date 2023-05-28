@@ -445,7 +445,7 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
     }
   }
 
-  for (uint32_t i_layer; i_layer < n_layers; i_layer++)
+  for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
     transformer_layer_baseline(new_i, embedding_in, w.layers[i_layer], cache_k, cache_v, temp, embedding_out);
 
@@ -563,7 +563,7 @@ int main()
 
   float *cache_k = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
   float *cache_v = (float *)aligned_alloc(cache_line_bytes, n_layers * n_context * n_hidden * sizeof(float));
-  for (int i = 0; i < n_layers * n_context * n_hidden; i++)
+  for (uint32_t i = 0; i < n_layers * n_context * n_hidden; i++)
   {
     cache_k[i] = 0.0f;
     cache_v[i] = 0.0f;
@@ -576,7 +576,7 @@ int main()
 
   uint32_t timing_group_size = 50;
   auto start_group = std::chrono::high_resolution_clock::now();
-  for (int i_context = 0; i_context < n_context; i_context++)
+  for (uint32_t i_context = 0; i_context < n_context; i_context++)
   {
     if (i_context % 50 == 0 && i_context != 0)
     {
