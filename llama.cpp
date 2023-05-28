@@ -39,16 +39,6 @@
 #define LLAMA_USE_SCRATCH
 #define LLAMA_MAX_SCRATCH_BUFFERS 16
 
-// available llama models
-enum e_model
-{
-  MODEL_UNKNOWN,
-  MODEL_7B,
-  MODEL_13B,
-  MODEL_30B,
-  MODEL_65B,
-};
-
 static const size_t MB = 1024 * 1024;
 
 // computed for n_ctx == 2048
@@ -101,106 +91,6 @@ static const std::map<e_model, size_t> &MEM_REQ_EVAL()
   };
   return k_sizes;
 }
-
-// default hparams (LLaMA 7B)
-struct llama_hparams
-{
-  uint32_t n_vocab = 32000;
-  uint32_t n_ctx = 512; // this is provided as user input?
-  uint32_t n_embd = 4096;
-  uint32_t n_mult = 256;
-  uint32_t n_head = 32;
-  uint32_t n_layer = 32;
-  uint32_t n_rot = 64;
-  enum llama_ftype ftype = LLAMA_FTYPE_MOSTLY_F16;
-
-  bool operator!=(const llama_hparams &other) const
-  {
-    return static_cast<bool>(memcmp(this, &other, sizeof(llama_hparams)));
-  }
-};
-
-struct llama_layer
-{
-  // normalization
-  struct ggml_tensor *attention_norm;
-
-  // attention
-  struct ggml_tensor *wq;
-  struct ggml_tensor *wk;
-  struct ggml_tensor *wv;
-  struct ggml_tensor *wo;
-
-  // normalization
-  struct ggml_tensor *ffn_norm;
-
-  // ff
-  struct ggml_tensor *w1;
-  struct ggml_tensor *w2;
-  struct ggml_tensor *w3;
-};
-
-struct llama_kv_cache
-{
-  struct ggml_tensor *k;
-  struct ggml_tensor *v;
-
-  struct ggml_context *ctx = NULL;
-
-  llama_ctx_buffer buf;
-
-  int n; // number of tokens currently in the cache
-
-  ~llama_kv_cache()
-  {
-    if (ctx)
-    {
-      ggml_free(ctx);
-    }
-  }
-};
-
-struct llama_model
-{
-  e_model type = MODEL_UNKNOWN;
-
-  llama_hparams hparams;
-
-  struct ggml_tensor *tok_embeddings;
-
-  struct ggml_tensor *norm;
-  struct ggml_tensor *output;
-
-  std::vector<llama_layer> layers;
-
-  // context
-  struct ggml_context *ctx = NULL;
-
-  // key + value cache for the self attention
-  // TODO: move to llama_state
-  struct llama_kv_cache kv_self;
-
-  // the model memory buffer
-  llama_ctx_buffer buf;
-
-  // model memory mapped file
-  std::unique_ptr<llama_mmap> mapping;
-
-  // objects representing data potentially being locked in memory
-  llama_mlock mlock_buf;
-  llama_mlock mlock_mmap;
-
-  // for quantize-stats only
-  std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
-
-  ~llama_model()
-  {
-    if (ctx)
-    {
-      ggml_free(ctx);
-    }
-  }
-};
 
 struct llama_vocab
 {
@@ -976,6 +866,7 @@ struct llama_context_params llama_context_default_params()
       /*.f16_kv                      =*/true,
       /*.logits_all                  =*/false,
       /*.vocab_only                  =*/false,
+      /*.model_only                  =*/false,
       /*.use_mmap                    =*/true,
       /*.use_mlock                   =*/false,
       /*.embedding                   =*/false,
@@ -2603,7 +2494,7 @@ struct llama_context *llama_init_from_file(
   }
 
   // reserve memory for context buffers
-  if (!params.vocab_only)
+  if (!params.vocab_only && !params.model_ony)
   {
     if (!kv_cache_init(ctx->model.hparams, ctx->model.kv_self, memory_type, ctx->model.hparams.n_ctx))
     {
@@ -3452,6 +3343,11 @@ const char *llama_print_system_info(void)
   s += "VSX = " + std::to_string(ggml_cpu_has_vsx()) + " | ";
 
   return s.c_str();
+}
+
+llama_model *llama_get_model(struct llama_context *ctx)
+{
+  return &ctx->model;
 }
 
 // For internal test use

@@ -39,8 +39,8 @@ endif
 # Compile flags
 #
 
-CFLAGS   = -I.              -O3 -std=c17 -ffast-math   -fPIC
-CXXFLAGS = -I. -I./examples -O3 -std=c++17 -ffast-math -fPIC
+CFLAGS   = -g -I.              -O3 -std=c17 -ffast-math   -fPIC
+CXXFLAGS = -g -I. -I./examples -O3 -std=c++17 -ffast-math -fPIC
 LDFLAGS  =
 
 ifndef LLAMA_DEBUG
@@ -197,15 +197,15 @@ endif
 # $(info I CC:       $(CCV))
 # $(info I CXX:      $(CXXV))
 # $(info )
-
+  
 #
 # Build library
 #
 
-ggml.o: ggml.c ggml.h ggml-cuda.h
+ggml.o: ggml.c ggml.h
 	$(CC)  $(CFLAGS)   -c $< -o $@
 
-llama.o: llama.cpp ggml.h ggml-cuda.h llama.h llama-util.h
+llama.o: llama.cpp ggml.h llama.h llama-util.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 common.o: examples/common.cpp examples/common.h
@@ -221,5 +221,5 @@ clean:
 # Examples
 #
 
-matri_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
+matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)

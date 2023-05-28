@@ -6,6 +6,7 @@
 #include <fmaintrin.h>
 #include <f16cintrin.h>
 #include <chrono>
+#include <llama.h>
 
 const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32, n_ff_multiple = 256, n_vocab = 32000;
 const uint32_t cache_line_bytes = 64;
@@ -489,8 +490,65 @@ void fill_rand_block_q8_0(block_q8_0 *block, uint32_t n, float scale)
   }
 }
 
-int main()
+TransformerWholeWeights load_llama_model(char *model_path)
 {
+  auto lparams = llama_context_default_params();
+  lparams.n_ctx = n_context;
+  lparams.n_gpu_layers = 0;
+  lparams.seed = 0;
+  lparams.f16_kv = false;
+  lparams.use_mmap = true;
+  lparams.use_mlock = false;
+  lparams.logits_all = false;
+  lparams.embedding = false;
+  lparams.vocab_only = false;
+  lparams.model_ony = true;
+
+  llama_context *lctx = llama_init_from_file(model_path, lparams);
+  llama_model *model = llama_get_model(lctx);
+
+  assert(model->hparams.n_vocab == n_vocab);
+  assert(model->hparams.n_ctx == n_context);
+  assert(model->hparams.n_embd == n_hidden);
+  assert(model->hparams.n_mult == n_ff_multiple);
+  assert(model->hparams.n_head == n_heads);
+  assert(model->hparams.n_layer == n_layers);
+
+  TransformerWholeWeights weights;
+  weights.layers = new TransformerLayerWeights[n_layers];
+  for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
+  {
+    auto &layer = weights.layers[i_layer];
+
+    layer.attention_norm = (float *)(model->layers[i_layer].attention_norm->data);
+    layer.ff_norm = (float *)model->layers[i_layer].ffn_norm->data;
+
+    layer.q = (block_q8_0 *)model->layers[i_layer].wq->data;
+    layer.k = (block_q8_0 *)model->layers[i_layer].wk->data;
+    layer.v = (block_q8_0 *)model->layers[i_layer].wv->data;
+    layer.o = (block_q8_0 *)model->layers[i_layer].wo->data;
+
+    layer.l1 = (block_q8_0 *)model->layers[i_layer].w1->data;
+    layer.l2 = (block_q8_0 *)model->layers[i_layer].w2->data;
+    layer.l3 = (block_q8_0 *)model->layers[i_layer].w3->data;
+  }
+
+  weights.token_embeddings = (block_q8_0 *)model->tok_embeddings->data;
+  weights.model_norm = (float *)model->norm->data;
+  weights.output_layer = (block_q8_0 *)model->output->data;
+
+  return weights;
+}
+
+int main(int argc, char **argv)
+{
+  if (argc != 2)
+  {
+    printf("usage: %s <model_path>\n", argv[0]);
+    exit(1);
+  }
+  char *model_path = argv[1];
+
   srand(0);
 
   init_table_f32_f16();
@@ -503,46 +561,11 @@ int main()
   assert(n_hidden % QK8_0 == 0);
   assert(n_context % QK8_0 == 0);
 
-  TransformerWholeWeights weights;
-  weights.layers = (TransformerLayerWeights *)aligned_alloc(cache_line_bytes, n_layers * sizeof(TransformerLayerWeights));
-  for (uint32_t i = 0; i < n_layers; i++)
-  {
-    weights.layers[i].q = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].k = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].v = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].o = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].l1 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_ff * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].l2 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_ff * n_hidden / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].l3 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_ff / QK8_0 * sizeof(block_q8_0));
-    weights.layers[i].attention_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-    weights.layers[i].ff_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  }
-  weights.token_embeddings = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden / QK8_0 * sizeof(block_q8_0));
-  weights.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  weights.output_layer = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden / QK8_0 * sizeof(block_q8_0));
+  llama_init_backend();
+  TransformerWholeWeights weights = load_llama_model(model_path);
 
-  float weight_scale = 1.0f / sqrtf(n_hidden);
-  for (uint32_t i = 0; i < n_layers; i++)
-  {
-    fill_rand_block_q8_0(weights.layers[i].q, n_hidden * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].k, n_hidden * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].v, n_hidden * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].o, n_hidden * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].l1, n_ff * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].l1, n_ff * n_hidden, weight_scale);
-    fill_rand_block_q8_0(weights.layers[i].l1, n_hidden * n_ff, weight_scale);
-    for (uint32_t j = 0; j < n_hidden; j++)
-    {
-      weights.layers[i].attention_norm[j] = rand_float_neg_1_1();
-      weights.layers[i].ff_norm[j] = rand_float_neg_1_1();
-    }
-  }
-  fill_rand_block_q8_0(weights.token_embeddings, n_vocab * n_hidden, weight_scale);
-  fill_rand_block_q8_0(weights.output_layer, n_vocab * n_hidden, weight_scale);
-  for (uint32_t i = 0; i < n_hidden; i++)
-  {
-    weights.model_norm[i] = rand_float_neg_1_1();
-  }
+  printf("Loaded model\n");
+  fflush(stdout);
 
   TempBaseline temp;
   temp.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
