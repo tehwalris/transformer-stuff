@@ -4,6 +4,7 @@
 #include <cassert>
 #include <immintrin.h>
 #include <fmaintrin.h>
+#include <f16cintrin.h>
 #include <chrono>
 
 const uint32_t n_hidden = 4096, n_context = 2048, n_layers = 32, n_heads = 32, n_ff_multiple = 256, n_vocab = 32000;
@@ -91,30 +92,117 @@ void softmax(uint32_t n, float *v)
   }
 }
 
-uint8_t to_quantized(float x)
+static inline float fp32_from_bits(uint32_t w)
 {
-  // range [-1, 1]
-  return uint8_t(std::round((x + 1.0f) * 255.0f / 2.0f));
+  union
+  {
+    uint32_t as_bits;
+    float as_value;
+  } fp32;
+  fp32.as_bits = w;
+  return fp32.as_value;
 }
 
-float from_quantized(uint8_t x)
+static inline uint32_t fp32_to_bits(float f)
 {
-  return float(x) * 2.0f / 255.0f - 1.0f;
+  union
+  {
+    float as_value;
+    uint32_t as_bits;
+  } fp32;
+  fp32.as_value = f;
+  return fp32.as_bits;
+}
+
+static inline float compute_fp16_to_fp32(uint16_t h)
+{
+  const uint32_t w = (uint32_t)h << 16;
+  const uint32_t sign = w & UINT32_C(0x80000000);
+  const uint32_t two_w = w + w;
+
+  const uint32_t exp_offset = UINT32_C(0xE0) << 23;
+  const float exp_scale = 0x1.0p-112f;
+  const float normalized_value = fp32_from_bits((two_w >> 4) + exp_offset) * exp_scale;
+
+  const uint32_t magic_mask = UINT32_C(126) << 23;
+  const float magic_bias = 0.5f;
+  const float denormalized_value = fp32_from_bits((two_w >> 17) | magic_mask) - magic_bias;
+
+  const uint32_t denormalized_cutoff = UINT32_C(1) << 27;
+  const uint32_t result = sign |
+                          (two_w < denormalized_cutoff ? fp32_to_bits(denormalized_value) : fp32_to_bits(normalized_value));
+  return fp32_from_bits(result);
+}
+
+static inline uint16_t compute_fp32_to_fp16(float f)
+{
+  const float scale_to_inf = 0x1.0p+112f;
+  const float scale_to_zero = 0x1.0p-110f;
+  float base = (fabsf(f) * scale_to_inf) * scale_to_zero;
+
+  const uint32_t w = fp32_to_bits(f);
+  const uint32_t shl1_w = w + w;
+  const uint32_t sign = w & UINT32_C(0x80000000);
+  uint32_t bias = shl1_w & UINT32_C(0xFF000000);
+  if (bias < UINT32_C(0x71000000))
+  {
+    bias = UINT32_C(0x71000000);
+  }
+
+  base = fp32_from_bits((bias >> 1) + UINT32_C(0x07800000)) + base;
+  const uint32_t bits = fp32_to_bits(base);
+  const uint32_t exp_bits = (bits >> 13) & UINT32_C(0x00007C00);
+  const uint32_t mantissa_bits = bits & UINT32_C(0x00000FFF);
+  const uint32_t nonsign = exp_bits + mantissa_bits;
+  return (sign >> 16) | (shl1_w > UINT32_C(0xFF000000) ? UINT16_C(0x7E00) : nonsign);
+}
+
+static float table_f32_f16[1 << 16];
+
+void init_table_f32_f16()
+{
+  for (int i = 0; i < (1 << 16); ++i)
+  {
+    table_f32_f16[i] = compute_fp16_to_fp32(i);
+  }
+}
+
+// Same format that llama.cpp uses
+#define QK8_0 32
+typedef struct
+{
+  uint16_t d;       // delta (fp16)
+  int8_t qs[QK8_0]; // quants
+} block_q8_0;
+
+static void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
+{
+  float d = table_f32_f16[quantized->d];
+  for (int j = 0; j < QK8_0; ++j)
+  {
+    output[j] = float(quantized->qs[j]) * d;
+  }
 }
 
 // Multiply an m x n matrix with an n element vector and store the result in an m element vector.
 // The matrix is stored in row-major order.
 template <uint32_t m, uint32_t n>
-void matrix_vector_multiply_quantized(uint8_t *mat_in, float *vec_in, float *vec_out)
+void matrix_vector_multiply_quantized(block_q8_0 *mat_in, float *vec_in, float *vec_out)
 {
-  for (uint32_t i = 0; i < m; i++)
+  assert(n % QK8_0 == 0);
+  for (uint32_t i_row = 0; i_row < m; i_row++)
   {
     float sum = 0.0;
-    for (uint32_t j = 0; j < n; j++)
+    for (uint32_t i_col = 0; i_col < n; i_col += QK8_0)
     {
-      sum += from_quantized(mat_in[i * n + j]) * vec_in[j];
+      float block[QK8_0];
+      from_quantized_block_q8_0((&mat_in[(i_row * n + i_col) / QK8_0]), block);
+      for (uint32_t i_offset = 0; i_offset < QK8_0; i_offset++)
+      {
+        sum += block[i_offset] * vec_in[i_col + i_offset];
+      }
     }
-    vec_out[i] = sum;
+    vec_out[i_row] = sum;
   }
 }
 
@@ -245,13 +333,13 @@ void attention_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
 
 struct TransformerLayerWeights
 {
-  uint8_t *q;            // n_hidden * n_hidden
-  uint8_t *k;            // n_hidden * n_hidden
-  uint8_t *v;            // n_hidden * n_hidden
-  uint8_t *o;            // n_hidden * n_hidden
-  uint8_t *l1;           // n_ff * n_hidden
-  uint8_t *l2;           // n_ff * n_hidden
-  uint8_t *l3;           // n_hidden * n_ff
+  block_q8_0 *q;         // n_hidden * n_hidden
+  block_q8_0 *k;         // n_hidden * n_hidden
+  block_q8_0 *v;         // n_hidden * n_hidden
+  block_q8_0 *o;         // n_hidden * n_hidden
+  block_q8_0 *l1;        // n_ff * n_hidden
+  block_q8_0 *l2;        // n_ff * n_hidden
+  block_q8_0 *l3;        // n_hidden * n_ff
   float *attention_norm; // n_hidden
   float *ff_norm;        // n_hidden
 };
@@ -259,9 +347,9 @@ struct TransformerLayerWeights
 struct TransformerWholeWeights
 {
   TransformerLayerWeights *layers; // n_layers
-  uint8_t *token_embeddings;       // n_vocab * n_hidden
+  block_q8_0 *token_embeddings;    // n_vocab * n_hidden
   float *model_norm;               // n_hidden
-  uint8_t *output_layer;           // n_hidden * n_vocab
+  block_q8_0 *output_layer;        // n_hidden * n_vocab
 };
 
 struct TempBaseline
@@ -345,9 +433,16 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
   float *embedding_in = temp.embedding_0;
   float *embedding_out = temp.embedding_1;
   float *last_layer_embedding_out = nullptr;
-  for (uint32_t i = 0; i < n_hidden; i++)
+
+  assert(n_hidden % QK8_0 == 0);
+  for (uint32_t i = 0; i < n_hidden; i += QK8_0)
   {
-    embedding_in[i] = w.token_embeddings[new_i * n_hidden + i];
+    float block[QK8_0];
+    from_quantized_block_q8_0(&w.token_embeddings[(new_token * n_hidden + i) / QK8_0], block);
+    for (uint32_t i_offset = 0; i_offset < QK8_0; i_offset++)
+    {
+      embedding_in[i + i_offset] = block[i_offset];
+    }
   }
 
   for (uint32_t i_layer; i_layer < n_layers; i_layer++)
@@ -369,12 +464,28 @@ float rand_float_neg_1_1()
   return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
 }
 
-void fill_rand_uint8(uint8_t *arr, uint32_t n)
+template <uint32_t n>
+void fill_rand_int8(int8_t *arr)
 {
   assert(n % 4 == 0);
   for (uint32_t i = 0; i < n; i += 4)
   {
-    *((uint32_t *)(void *)(arr + i)) = rand();
+    *((int32_t *)(void *)(arr + i)) = rand();
+  }
+}
+
+void rand_block_q8_0(block_q8_0 *block, float scale)
+{
+  block->d = compute_fp32_to_fp16(scale);
+  fill_rand_int8<QK8_0>(block->qs);
+}
+
+void fill_rand_block_q8_0(block_q8_0 *block, uint32_t n, float scale)
+{
+  assert(n % QK8_0 == 0);
+  for (uint32_t i_block = 0; i_block < n / QK8_0; i_block++)
+  {
+    rand_block_q8_0(&block[i_block], scale);
   }
 }
 
@@ -382,47 +493,52 @@ int main()
 {
   srand(0);
 
+  init_table_f32_f16();
+
   assert(cache_line_bytes % (8 * sizeof(float)) == 0);
   assert(n_context % cache_line_bytes == 0);
   assert(n_hidden % cache_line_bytes == 0);
   assert(n_hidden % cache_line_bytes == 0);
   assert(n_hidden % n_heads == 0);
+  assert(n_hidden % QK8_0 == 0);
+  assert(n_context % QK8_0 == 0);
 
   TransformerWholeWeights weights;
   weights.layers = (TransformerLayerWeights *)aligned_alloc(cache_line_bytes, n_layers * sizeof(TransformerLayerWeights));
   for (uint32_t i = 0; i < n_layers; i++)
   {
-    weights.layers[i].q = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
-    weights.layers[i].k = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
-    weights.layers[i].v = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
-    weights.layers[i].o = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden * sizeof(uint8_t));
-    weights.layers[i].l1 = (uint8_t *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(uint8_t));
-    weights.layers[i].l2 = (uint8_t *)aligned_alloc(cache_line_bytes, n_ff * n_hidden * sizeof(uint8_t));
-    weights.layers[i].l3 = (uint8_t *)aligned_alloc(cache_line_bytes, n_hidden * n_ff * sizeof(uint8_t));
+    weights.layers[i].q = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].k = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].v = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].o = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].l1 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_ff * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].l2 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_ff * n_hidden / QK8_0 * sizeof(block_q8_0));
+    weights.layers[i].l3 = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_hidden * n_ff / QK8_0 * sizeof(block_q8_0));
     weights.layers[i].attention_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
     weights.layers[i].ff_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   }
-  weights.token_embeddings = (uint8_t *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(uint8_t));
+  weights.token_embeddings = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden / QK8_0 * sizeof(block_q8_0));
   weights.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  weights.output_layer = (uint8_t *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden * sizeof(uint8_t));
+  weights.output_layer = (block_q8_0 *)aligned_alloc(cache_line_bytes, n_vocab * n_hidden / QK8_0 * sizeof(block_q8_0));
 
+  float weight_scale = 1.0f / sqrtf(n_hidden);
   for (uint32_t i = 0; i < n_layers; i++)
   {
-    fill_rand_uint8(weights.layers[i].q, n_hidden * n_hidden);
-    fill_rand_uint8(weights.layers[i].k, n_hidden * n_hidden);
-    fill_rand_uint8(weights.layers[i].v, n_hidden * n_hidden);
-    fill_rand_uint8(weights.layers[i].o, n_hidden * n_hidden);
-    fill_rand_uint8(weights.layers[i].l1, n_ff * n_hidden);
-    fill_rand_uint8(weights.layers[i].l1, n_ff * n_hidden);
-    fill_rand_uint8(weights.layers[i].l1, n_hidden * n_ff);
+    fill_rand_block_q8_0(weights.layers[i].q, n_hidden * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].k, n_hidden * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].v, n_hidden * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].o, n_hidden * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].l1, n_ff * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].l1, n_ff * n_hidden, weight_scale);
+    fill_rand_block_q8_0(weights.layers[i].l1, n_hidden * n_ff, weight_scale);
     for (uint32_t j = 0; j < n_hidden; j++)
     {
       weights.layers[i].attention_norm[j] = rand_float_neg_1_1();
       weights.layers[i].ff_norm[j] = rand_float_neg_1_1();
     }
   }
-  fill_rand_uint8(weights.token_embeddings, n_vocab * n_hidden);
-  fill_rand_uint8(weights.output_layer, n_vocab * n_hidden);
+  fill_rand_block_q8_0(weights.token_embeddings, n_vocab * n_hidden, weight_scale);
+  fill_rand_block_q8_0(weights.output_layer, n_vocab * n_hidden, weight_scale);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
     weights.model_norm[i] = rand_float_neg_1_1();
@@ -475,11 +591,6 @@ int main()
     }
 
     transformer_whole_baseline(i_context, last_token, weights, cache_k, cache_v, temp, token_probs);
-
-    for (uint32_t i = 0; i < n_vocab; i++)
-    {
-      printf("%f ", token_probs[i]);
-    }
 
     last_token = uint32_t(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
     printf("%d ", last_token);
