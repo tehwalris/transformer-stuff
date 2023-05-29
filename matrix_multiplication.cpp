@@ -722,14 +722,92 @@ float thing_baseline(uint32_t n, int8_t *a, float *b)
 }
 
 template <uint32_t n>
-float thing_fast(int8_t *a, float *b)
+float thing_fast(int8_t *a, float *b_shuffled)
 {
-  float sum = 0.0f;
-  for (uint32_t i = 0; i < n; i++)
+  assert(n % 32 == 0);
+
+  __m256 sum = _mm256_setzero_ps();
+  for (uint32_t i = 0; i < n / 32; i++)
   {
-    sum += float(a[i]) * b[i];
+    __m256i va_epi8 = _mm256_load_si256(&((__m256i *)a)[i]);
+
+    // Per 128 bit lane: Load the first 4 int8 values from va_epi8 into the MSB of 4 int32 values of va_epi32_0
+    __m256i shuffle_mask_0 = _mm256_set_epi32(
+        0x03FFFFFF, 0x02FFFFFF, 0x01FFFFFF, 0x00FFFFFF,
+        0x03FFFFFF, 0x02FFFFFF, 0x01FFFFFF, 0x00FFFFFF);
+    __m256i va_epi32_0 = _mm256_shuffle_epi8(va_epi8, shuffle_mask_0);
+    // Sign extend each int32 to value to correctly represent the int8 value
+    va_epi32_0 = _mm256_srai_epi32(va_epi32_0, 24);
+    __m256 va_ps_0 = _mm256_cvtepi32_ps(va_epi32_0);
+    __m256 vb_0 = _mm256_load_ps(&b_shuffled[i * 32 + 0]);
+    sum = _mm256_fmadd_ps(va_ps_0, vb_0, sum);
+
+    __m256i shuffle_mask_1 = _mm256_set_epi32(
+        0x07FFFFFF, 0x06FFFFFF, 0x05FFFFFF, 0x04FFFFFF,
+        0x07FFFFFF, 0x06FFFFFF, 0x05FFFFFF, 0x04FFFFFF);
+    __m256i va_epi32_1 = _mm256_shuffle_epi8(va_epi8, shuffle_mask_1);
+    va_epi32_1 = _mm256_srai_epi32(va_epi32_1, 24);
+    __m256 va_ps_1 = _mm256_cvtepi32_ps(va_epi32_1);
+    __m256 vb_1 = _mm256_load_ps(&b_shuffled[i * 32 + 8]);
+    sum = _mm256_fmadd_ps(va_ps_1, vb_1, sum);
+
+    __m256i shuffle_mask_2 = _mm256_set_epi32(
+        0x0BFFFFFF, 0x0AFFFFFF, 0x09FFFFFF, 0x08FFFFFF,
+        0x0BFFFFFF, 0x0AFFFFFF, 0x09FFFFFF, 0x08FFFFFF);
+    __m256i va_epi32_2 = _mm256_shuffle_epi8(va_epi8, shuffle_mask_2);
+    va_epi32_2 = _mm256_srai_epi32(va_epi32_2, 24);
+    __m256 va_ps_2 = _mm256_cvtepi32_ps(va_epi32_2);
+    __m256 vb_2 = _mm256_load_ps(&b_shuffled[i * 32 + 16]);
+    sum = _mm256_fmadd_ps(va_ps_2, vb_2, sum);
+
+    __m256i shuffle_mask_3 = _mm256_set_epi32(
+        0x0FFFFFFF, 0x0EFFFFFF, 0x0DFFFFFF, 0x0CFFFFFF,
+        0x0FFFFFFF, 0x0EFFFFFF, 0x0DFFFFFF, 0x0CFFFFFF);
+    __m256i va_epi32_3 = _mm256_shuffle_epi8(va_epi8, shuffle_mask_3);
+    va_epi32_3 = _mm256_srai_epi32(va_epi32_3, 24);
+    __m256 va_ps_3 = _mm256_cvtepi32_ps(va_epi32_3);
+    __m256 vb_3 = _mm256_load_ps(&b_shuffled[i * 32 + 24]);
+    sum = _mm256_fmadd_ps(va_ps_3, vb_3, sum);
+
+    // __attribute__((aligned(32))) uint32_t debug_int[8];
+    // _mm256_store_si256((__m256i *)debug_int, va_epi32_1);
+    // __attribute__((aligned(32))) float debug_float[8];
+    // _mm256_store_ps(debug_float, vb_1);
+    // printf("va_ep32_1: ");
+    // for (uint32_t j = 0; j < 8; j++)
+    // {
+    //   printf("%8x ", debug_int[j]);
+    // }
+    // printf("\n");
+    // printf("vb_1:      ");
+    // for (uint32_t j = 0; j < 8; j++)
+    // {
+    //   printf("%f ", debug_float[j]);
+    // }
+    // printf("\n");
+    // printf("a:         ");
+    // for (uint32_t j = 0; j < 32; j++)
+    // {
+    //   if (j != 0 && j % 8 == 0)
+    //   {
+    //     printf("\n           ");
+    //   }
+    //   printf("%8x ", a[i * 32 + j]);
+    // }
+    // printf("\n");
+    // printf("b:         ");
+    // for (uint32_t j = 0; j < 32; j++)
+    // {
+    //   if (j != 0 && j % 8 == 0)
+    //   {
+    //     printf("\n           ");
+    //   }
+    //   printf("%f ", b[i * 32 + j]);
+    // }
+    // printf("\n");
+    // return 0.0f;
   }
-  return sum;
+  return _mm256_reduce_add_ps_float(sum);
 }
 
 int main(int argc, char **argv)
@@ -792,6 +870,7 @@ int main(int argc, char **argv)
 
     int8_t *a = (int8_t *)aligned_alloc(cache_line_bytes, n * sizeof(int8_t));
     float *b = (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
+    float *b_shuffled = (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
 
     fill_rand_int8<n>(a);
     for (uint32_t i = 0; i < n; i++)
@@ -799,29 +878,48 @@ int main(int argc, char **argv)
       b[i] = (float)rand_float_neg_1_1();
     }
 
+    /*
+    0 1 2 3 - 16 17 18 19
+    4 5 6 7 - 20 21 22 23
+    8 9 10 11 - 24 25 26 27
+    12 13 14 15 - 28 29 30 31
+    */
+    assert(n % 32 == 0);
+    for (uint32_t i = 0; i < n; i += 32)
+    {
+      for (uint32_t j = 0; j < 4; j++)
+      {
+        for (uint32_t k = 0; k < 4; k++)
+        {
+          b_shuffled[i + j * 8 + k + 0] = b[i + j * 4 + k + 0];
+          b_shuffled[i + j * 8 + k + 4] = b[i + j * 4 + k + 16];
+        }
+      }
+    }
+
     std::chrono::high_resolution_clock::time_point start, end;
-    float result_baseline, result_fast;
+    volatile float result_baseline = 0.0f, result_fast = 0.0f;
 
     start = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_iterations; i++)
     {
-      result_baseline = thing_baseline(n, a, b);
+      result_fast += thing_fast<n>(a, b_shuffled);
     }
     end = std::chrono::high_resolution_clock::now();
     {
       std::chrono::duration<double> elapsed = end - start;
-      printf("thing_baseline: %f ms per iteration; result %f\n", elapsed.count() / num_iterations * 1000.0f, result_baseline);
+      printf("thing_fast: %f us per iteration; result %f\n", elapsed.count() / num_iterations * 1e6f, result_fast);
     }
 
     start = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_iterations; i++)
     {
-      result_fast = thing_fast<n>(a, b);
+      result_baseline += thing_baseline(n, a, b);
     }
     end = std::chrono::high_resolution_clock::now();
     {
       std::chrono::duration<double> elapsed = end - start;
-      printf("thing_fast: %f ms per iteration; result %f\n", elapsed.count() / num_iterations * 1000.0f, result_fast);
+      printf("thing_baseline: %f us per iteration; result %f\n", elapsed.count() / num_iterations * 1e6f, result_baseline);
     }
 
     return 0;
