@@ -173,8 +173,7 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
         temp_dot_product[i_head * n_context + i_context] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
       }
     }
-    else
-    {
+
       for (uint32_t i_head = 0; i_head < n_heads; i_head++)
       {
     softmax(new_i + 1, &temp_dot_product[i_head * n_context]);
