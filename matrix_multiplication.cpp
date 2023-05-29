@@ -173,16 +173,16 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
 
   // Calculate the dot product with each cached K (per head)
   for (uint32_t i_context = 0; i_context <= new_i; i_context++)
+  {
+    for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
-      for (uint32_t i_head = 0; i_head < n_heads; i_head++)
-      {
-        uint32_t head_offset = i_head * (n_hidden / n_heads);
-        temp_dot_product[i_head * n_context + i_context] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
-      }
+      uint32_t head_offset = i_head * (n_hidden / n_heads);
+      temp_dot_product[i_head * n_context + i_context] = dot_product_scale * vector_dot_product_baseline(n_hidden / n_heads, &new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
     }
+  }
 
-      for (uint32_t i_head = 0; i_head < n_heads; i_head++)
-      {
+  for (uint32_t i_head = 0; i_head < n_heads; i_head++)
+  {
     softmax(new_i + 1, &temp_dot_product[i_head * n_context]);
   }
 
@@ -564,29 +564,20 @@ int main(int argc, char **argv)
     {
       auto now = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> elapsed = now - start_group;
-      printf(" time for last 50 of %d iterations: %fs; %fus per KV pair and layer; %fMB KV cache per layer\n",
+      printf("\n=== time for last 50 of %d iterations: %fs ===\n",
              i_context,
-             float(elapsed.count()),
-             1e6f * float(elapsed.count()) / float(timing_group_size) / float(i_context) / float(n_layers),
-             2 * i_context * n_hidden * sizeof(float) / 1e6f);
+             float(elapsed.count()));
       start_group = now;
     }
 
     llama_token input_token = i_context < n_input_tokens ? input_tokens[i_context] : last_token;
     printf("%s", llama_token_to_str(lctx, input_token));
-
-    llama_eval(lctx, &input_token, 1, i_context, 1);
-    float *expected_logits = llama_get_logits(lctx);
-    llama_token expected_token = uint32_t(std::max_element(expected_logits, expected_logits + n_vocab) - expected_logits);
-    // printf("Expected: logits %f %f token \"%s\" (%d)\n", expected_logits[400], expected_logits[500], llama_token_to_str(lctx, expected_token), expected_token);
-
-    transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp, token_probs);
-    llama_token actual_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
-
-    // printf("Actual: logits %f %f token \"%s\" (%d)\n", token_probs[400], token_probs[500], llama_token_to_str(lctx, actual_token), actual_token);
     fflush(stdout);
 
-    last_token = actual_token;
+    transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp, token_probs);
+    llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+
+    last_token = output_token;
   }
   printf("\n");
 
