@@ -50,6 +50,13 @@ int32_t _mm256i_reduce_add_int16_t_int32_t(__m256i vec)
   return sum;
 }
 
+__m256 _mm256i_reduce_add_int16_t_float(__m256i vec)
+{
+  // from ggml sum_i16_pairs_float
+  const __m256i summed_pairs = _mm256_madd_epi16(_mm256_set1_epi16(1), vec);
+  return _mm256_cvtepi32_ps(summed_pairs);
+}
+
 template <uint32_t n>
 float vector_dot_product_fast(float *va, float *vb)
 {
@@ -152,7 +159,7 @@ float dot_product_block_q8_0_baseline(block_q8_0 *a, block_q8_0 *b)
   return sum * ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d);
 }
 
-float dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b)
+__m256 dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b)
 {
   __m256i qa = _mm256_loadu_si256((__m256i *)a->qs);
   __m256i qb = _mm256_loadu_si256((__m256i *)b->qs);
@@ -162,9 +169,9 @@ float dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b)
   __m256i b_times_sign_a = _mm256_sign_epi8(qb, qa);
 
   __m256i summed_products = _mm256_maddubs_epi16(abs_a, b_times_sign_a);
-  int32_t sum = _mm256i_reduce_add_int16_t_int32_t(summed_products);
+  __m256 sum = _mm256i_reduce_add_int16_t_float(summed_products);
 
-  return float(sum) * ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d);
+  return _mm256_mul_ps(sum, _mm256_set1_ps(ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d)));
 }
 
 // Multiply an m x n matrix with an n element vector and store the result in an m element vector.
@@ -201,12 +208,13 @@ void matrix_vector_multiply_quantized_fast(block_q8_0 *mat_in, float *vec_in, fl
 
   for (uint32_t i_row = 0; i_row < m; i_row++)
   {
-    float sum = 0.0;
+    __m256 sum = _mm256_setzero_ps();
     for (uint32_t i_block = 0; i_block < n / QK8_0; i_block++)
     {
-      sum += dot_product_block_q8_0_fast(&mat_in[(i_row * n) / QK8_0 + i_block], &temp_vec_in_quantized[i_block]);
+      __m256 sum_block = dot_product_block_q8_0_fast(&mat_in[(i_row * n) / QK8_0 + i_block], &temp_vec_in_quantized[i_block]);
+      sum = _mm256_add_ps(sum, sum_block);
     }
-    vec_out[i_row] = sum;
+    vec_out[i_row] = _mm256_reduce_add_ps_float(sum);
   }
 }
 
