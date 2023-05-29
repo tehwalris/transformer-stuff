@@ -116,6 +116,73 @@ void softmax(uint32_t n, float *v)
   }
 }
 
+template <uint32_t n>
+void shuffle_32(float *original, float *shuffled)
+{
+  /*
+  0 4 8 12 16 20 24 28
+  1 5 9 13 17 21 25 29
+  2 6 10 14 18 22 26 30
+  3 7 11 15 19 23 27 31
+  */
+  assert(n % 32 == 0);
+  for (uint32_t i = 0; i < n; i += 32)
+  {
+    for (uint32_t j = 0; j < 4; j++)
+    {
+      for (uint32_t k = 0; k < 8; k++)
+      {
+        shuffled[i + j * 8 + k] = original[i + j + k * 4];
+      }
+    }
+  }
+}
+
+float thing_baseline(uint32_t n, int8_t *a, float *b)
+{
+  float sum = 0.0f;
+  for (uint32_t i = 0; i < n; i++)
+  {
+    sum += float(a[i]) * b[i];
+  }
+  return sum;
+}
+
+template <uint32_t n>
+float thing_fast(int8_t *a, float *b_shuffled)
+{
+  assert(n % 32 == 0);
+
+  __m256 sum_0 = _mm256_setzero_ps();
+  __m256 sum_1 = _mm256_setzero_ps();
+  for (uint32_t i = 0; i < n / 32; i++)
+  {
+    __m256i va_epi8 = _mm256_load_si256(&((__m256i *)a)[i]);
+
+    // Per each 4 int8 values, extract the first int8, sign extend it to int32, and convert to float
+    __m256i va_epi32_0 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 24), 24);
+    __m256 va_ps_0 = _mm256_cvtepi32_ps(va_epi32_0);
+    __m256 vb_0 = _mm256_load_ps(&b_shuffled[i * 32 + 0]);
+    sum_0 = _mm256_fmadd_ps(va_ps_0, vb_0, sum_0);
+
+    __m256i va_epi32_1 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 16), 24);
+    __m256 va_ps_1 = _mm256_cvtepi32_ps(va_epi32_1);
+    __m256 vb_1 = _mm256_load_ps(&b_shuffled[i * 32 + 8]);
+    sum_1 = _mm256_fmadd_ps(va_ps_1, vb_1, sum_1);
+
+    __m256i va_epi32_2 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 8), 24);
+    __m256 va_ps_2 = _mm256_cvtepi32_ps(va_epi32_2);
+    __m256 vb_2 = _mm256_load_ps(&b_shuffled[i * 32 + 16]);
+    sum_0 = _mm256_fmadd_ps(va_ps_2, vb_2, sum_0);
+
+    __m256i va_epi32_3 = _mm256_srai_epi32(va_epi8, 24);
+    __m256 va_ps_3 = _mm256_cvtepi32_ps(va_epi32_3);
+    __m256 vb_3 = _mm256_load_ps(&b_shuffled[i * 32 + 24]);
+    sum_1 = _mm256_fmadd_ps(va_ps_3, vb_3, sum_1);
+  }
+  return _mm256_reduce_add_ps_float(_mm256_add_ps(sum_0, sum_1));
+}
+
 // Same format that llama.cpp uses
 #define QK8_0 32
 typedef struct
@@ -209,21 +276,47 @@ void matrix_vector_multiply_quantized(block_q8_0 *mat_in, float *vec_in, float *
 template <uint32_t m, uint32_t n>
 void matrix_vector_multiply_quantized_fast(block_q8_0 *mat_in, float *vec_in,
                                            float *vec_out,
-                                           int8_t *temp_vec_in_quantized_qs, float *temp_vec_in_quantized_d)
+                                           float *temp_vec_in_shuffled)
 {
   assert(n % QK8_0 == 0);
+  assert(QK8_0 == 32);
 
-  for (uint32_t i_block = 0; i_block < n / QK8_0; i_block++)
-  {
-    temp_vec_in_quantized_d[i_block] = to_quantized_block_q8_0_raw(&vec_in[i_block * QK8_0], &temp_vec_in_quantized_qs[i_block * QK8_0]);
-  }
+  shuffle_32<n>(vec_in, temp_vec_in_shuffled);
 
   for (uint32_t i_row = 0; i_row < m; i_row++)
   {
     __m256 sum = _mm256_setzero_ps();
-    for (uint32_t i_block = 0; i_block < n / QK8_0; i_block++)
+    for (uint32_t i = 0; i < n / 32; i++)
     {
-      sum = dot_product_block_q8_0_fast(&mat_in[(i_row * n) / QK8_0 + i_block], &temp_vec_in_quantized_qs[i_block * QK8_0], temp_vec_in_quantized_d[i_block], sum);
+      __m256 sum_0 = _mm256_setzero_ps();
+      __m256 sum_1 = _mm256_setzero_ps();
+
+      __m256i va_epi8 = _mm256_loadu_si256((__m256i *)(mat_in[i_row * n / QK8_0 + i].qs));
+
+      // Per each 4 int8 values, extract the first int8, sign extend it to int32, and convert to float
+      __m256i va_epi32_0 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 24), 24);
+      __m256 va_ps_0 = _mm256_cvtepi32_ps(va_epi32_0);
+      __m256 vb_0 = _mm256_load_ps(&temp_vec_in_shuffled[i * 32 + 0]);
+      sum_0 = _mm256_fmadd_ps(va_ps_0, vb_0, sum_0);
+
+      __m256i va_epi32_1 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 16), 24);
+      __m256 va_ps_1 = _mm256_cvtepi32_ps(va_epi32_1);
+      __m256 vb_1 = _mm256_load_ps(&temp_vec_in_shuffled[i * 32 + 8]);
+      sum_1 = _mm256_fmadd_ps(va_ps_1, vb_1, sum_1);
+
+      __m256i va_epi32_2 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 8), 24);
+      __m256 va_ps_2 = _mm256_cvtepi32_ps(va_epi32_2);
+      __m256 vb_2 = _mm256_load_ps(&temp_vec_in_shuffled[i * 32 + 16]);
+      sum_0 = _mm256_fmadd_ps(va_ps_2, vb_2, sum_0);
+
+      __m256i va_epi32_3 = _mm256_srai_epi32(va_epi8, 24);
+      __m256 va_ps_3 = _mm256_cvtepi32_ps(va_epi32_3);
+      __m256 vb_3 = _mm256_load_ps(&temp_vec_in_shuffled[i * 32 + 24]);
+      sum_1 = _mm256_fmadd_ps(va_ps_3, vb_3, sum_1);
+
+      __m256 d = _mm256_set1_ps(table_f32_f16[mat_in[i_row * n / QK8_0 + i].d]);
+      sum = _mm256_fmadd_ps(d, sum_0, sum);
+      sum = _mm256_fmadd_ps(d, sum_1, sum);
     }
     vec_out[i_row] = _mm256_reduce_add_ps_float(sum);
   }
@@ -394,8 +487,7 @@ struct TempFast
   float *l3;                 // n_ff
   float *model_norm;         // n_hidden
   block_q8_0 *quantized_vec; // n_ff
-  int8_t *quantized_vec_qs;  // n_ff
-  float *quantized_vec_d;    // n_ff
+  float *shuffled_vec;       // n_ff
 };
 
 void transformer_layer_fast(uint32_t new_i, float *new_hidden,
@@ -412,9 +504,9 @@ void transformer_layer_fast(uint32_t new_i, float *new_hidden,
   }
 
   // Compute Q, K, V
-  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.q, temp.norm_residual, temp.q, temp.quantized_vec_qs, temp.quantized_vec_d);
-  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.k, temp.norm_residual, temp.k, temp.quantized_vec_qs, temp.quantized_vec_d);
-  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.v, temp.norm_residual, temp.v, temp.quantized_vec_qs, temp.quantized_vec_d);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.q, temp.norm_residual, temp.q, temp.shuffled_vec);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.k, temp.norm_residual, temp.k, temp.shuffled_vec);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.v, temp.norm_residual, temp.v, temp.shuffled_vec);
 
   // Apply RoPE
   apply_rope(new_i, temp.q);
@@ -427,7 +519,7 @@ void transformer_layer_fast(uint32_t new_i, float *new_hidden,
                  temp.attention_result);
 
   // Projection and residual
-  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o, temp.quantized_vec_qs, temp.quantized_vec_d);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o, temp.shuffled_vec);
   for (uint32_t i = 0; i < n_hidden; i++)
   {
     temp.o[i] += new_hidden[i];
@@ -441,14 +533,14 @@ void transformer_layer_fast(uint32_t new_i, float *new_hidden,
   }
 
   // Feed forward
-  matrix_vector_multiply_quantized_fast<n_ff, n_hidden>(w.l1, temp.norm_residual, temp.l1, temp.quantized_vec_qs, temp.quantized_vec_d);
-  matrix_vector_multiply_quantized_fast<n_ff, n_hidden>(w.l3, temp.norm_residual, temp.l3, temp.quantized_vec_qs, temp.quantized_vec_d);
+  matrix_vector_multiply_quantized_fast<n_ff, n_hidden>(w.l1, temp.norm_residual, temp.l1, temp.shuffled_vec);
+  matrix_vector_multiply_quantized_fast<n_ff, n_hidden>(w.l3, temp.norm_residual, temp.l3, temp.shuffled_vec);
 
   for (uint32_t i = 0; i < n_ff; i++)
   {
     temp.l3[i] *= silu(temp.l1[i]);
   }
-  matrix_vector_multiply_quantized_fast<n_hidden, n_ff>(w.l2, temp.l3, temp.l2, temp.quantized_vec_qs, temp.quantized_vec_d);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_ff>(w.l2, temp.l3, temp.l2, temp.shuffled_vec);
 
   // Residual
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -497,7 +589,7 @@ void transformer_whole_fast(uint32_t new_i, uint32_t new_token,
   {
     temp.model_norm[i] *= w.model_norm[i];
   }
-  matrix_vector_multiply_quantized_fast<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out, temp.quantized_vec_qs, temp.quantized_vec_d);
+  matrix_vector_multiply_quantized_fast<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out, temp.shuffled_vec);
 }
 
 struct TempBaseline
@@ -711,51 +803,6 @@ llama_context *load_llama_model(char *model_path, TransformerWholeWeights *weigh
   return lctx;
 }
 
-float thing_baseline(uint32_t n, int8_t *a, float *b)
-{
-  float sum = 0.0f;
-  for (uint32_t i = 0; i < n; i++)
-  {
-    sum += float(a[i]) * b[i];
-  }
-  return sum;
-}
-
-template <uint32_t n>
-float thing_fast(int8_t *a, float *b_shuffled)
-{
-  assert(n % 32 == 0);
-
-  __m256 sum_0 = _mm256_setzero_ps();
-  __m256 sum_1 = _mm256_setzero_ps();
-  for (uint32_t i = 0; i < n / 32; i++)
-  {
-    __m256i va_epi8 = _mm256_load_si256(&((__m256i *)a)[i]);
-
-    // Per each 4 int8 values, extract the first int8, sign extend it to int32, and convert to float
-    __m256i va_epi32_0 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 24), 24);
-    __m256 va_ps_0 = _mm256_cvtepi32_ps(va_epi32_0);
-    __m256 vb_0 = _mm256_load_ps(&b_shuffled[i * 32 + 0]);
-    sum_0 = _mm256_fmadd_ps(va_ps_0, vb_0, sum_0);
-
-    __m256i va_epi32_1 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 16), 24);
-    __m256 va_ps_1 = _mm256_cvtepi32_ps(va_epi32_1);
-    __m256 vb_1 = _mm256_load_ps(&b_shuffled[i * 32 + 8]);
-    sum_1 = _mm256_fmadd_ps(va_ps_1, vb_1, sum_1);
-
-    __m256i va_epi32_2 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 8), 24);
-    __m256 va_ps_2 = _mm256_cvtepi32_ps(va_epi32_2);
-    __m256 vb_2 = _mm256_load_ps(&b_shuffled[i * 32 + 16]);
-    sum_0 = _mm256_fmadd_ps(va_ps_2, vb_2, sum_0);
-
-    __m256i va_epi32_3 = _mm256_srai_epi32(va_epi8, 24);
-    __m256 va_ps_3 = _mm256_cvtepi32_ps(va_epi32_3);
-    __m256 vb_3 = _mm256_load_ps(&b_shuffled[i * 32 + 24]);
-    sum_1 = _mm256_fmadd_ps(va_ps_3, vb_3, sum_1);
-  }
-  return _mm256_reduce_add_ps_float(_mm256_add_ps(sum_0, sum_1));
-}
-
 int main(int argc, char **argv)
 {
   if (argc != 2)
@@ -807,12 +854,11 @@ int main(int argc, char **argv)
   temp_fast.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
   temp_fast.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp_fast.quantized_vec = (block_q8_0 *)aligned_alloc(cache_line_bytes, (n_ff / QK8_0) * sizeof(block_q8_0));
-  temp_fast.quantized_vec_qs = (int8_t *)aligned_alloc(cache_line_bytes, n_ff * sizeof(int8_t));
-  temp_fast.quantized_vec_d = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp_fast.shuffled_vec = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
 
   {
     const uint32_t n = n_hidden;
-    uint32_t num_iterations = 1e6;
+    uint32_t num_iterations = 1e4;
 
     int8_t *a = (int8_t *)aligned_alloc(cache_line_bytes, n * sizeof(int8_t));
     float *b = (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
@@ -822,24 +868,6 @@ int main(int argc, char **argv)
     for (uint32_t i = 0; i < n; i++)
     {
       b[i] = (float)rand_float_neg_1_1();
-    }
-
-    /*
-    0 4 8 12 16 20 24 28
-    1 5 9 13 17 21 25 29
-    2 6 10 14 18 22 26 30
-    3 7 11 15 19 23 27 31
-    */
-    assert(n % 32 == 0);
-    for (uint32_t i = 0; i < n; i += 32)
-    {
-      for (uint32_t j = 0; j < 4; j++)
-      {
-        for (uint32_t k = 0; k < 8; k++)
-        {
-          b_shuffled[i + j * 8 + k] = b[i + j + k * 4];
-        }
-      }
     }
 
     std::chrono::high_resolution_clock::time_point start, end;
@@ -866,8 +894,6 @@ int main(int argc, char **argv)
       std::chrono::duration<double> elapsed = end - start;
       printf("thing_baseline: %f us per iteration; result %f\n", elapsed.count() / num_iterations * 1e6f, result_baseline);
     }
-
-    return 0;
   }
 
   llama_init_backend();
@@ -900,7 +926,7 @@ int main(int argc, char **argv)
   fflush(stdout);
 
   const uint32_t max_input_tokens = 1000;
-  std::string input_string = " How are you";
+  std::string input_string = " Walrus";
   llama_token input_tokens[max_input_tokens];
   uint32_t n_input_tokens = llama_tokenize(lctx, input_string.c_str(), input_tokens, max_input_tokens, true);
   assert(n_input_tokens >= 1);
