@@ -726,7 +726,8 @@ float thing_fast(int8_t *a, float *b_shuffled)
 {
   assert(n % 32 == 0);
 
-  __m256 sum = _mm256_setzero_ps();
+  __m256 sum_0 = _mm256_setzero_ps();
+  __m256 sum_1 = _mm256_setzero_ps();
   for (uint32_t i = 0; i < n / 32; i++)
   {
     __m256i va_epi8 = _mm256_load_si256(&((__m256i *)a)[i]);
@@ -735,24 +736,24 @@ float thing_fast(int8_t *a, float *b_shuffled)
     __m256i va_epi32_0 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 24), 24);
     __m256 va_ps_0 = _mm256_cvtepi32_ps(va_epi32_0);
     __m256 vb_0 = _mm256_load_ps(&b_shuffled[i * 32 + 0]);
-    sum = _mm256_fmadd_ps(va_ps_0, vb_0, sum);
+    sum_0 = _mm256_fmadd_ps(va_ps_0, vb_0, sum_0);
 
     __m256i va_epi32_1 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 16), 24);
     __m256 va_ps_1 = _mm256_cvtepi32_ps(va_epi32_1);
     __m256 vb_1 = _mm256_load_ps(&b_shuffled[i * 32 + 8]);
-    sum = _mm256_fmadd_ps(va_ps_1, vb_1, sum);
+    sum_1 = _mm256_fmadd_ps(va_ps_1, vb_1, sum_1);
 
     __m256i va_epi32_2 = _mm256_srai_epi32(_mm256_slli_epi32(va_epi8, 8), 24);
     __m256 va_ps_2 = _mm256_cvtepi32_ps(va_epi32_2);
     __m256 vb_2 = _mm256_load_ps(&b_shuffled[i * 32 + 16]);
-    sum = _mm256_fmadd_ps(va_ps_2, vb_2, sum);
+    sum_0 = _mm256_fmadd_ps(va_ps_2, vb_2, sum_0);
 
     __m256i va_epi32_3 = _mm256_srai_epi32(va_epi8, 24);
     __m256 va_ps_3 = _mm256_cvtepi32_ps(va_epi32_3);
     __m256 vb_3 = _mm256_load_ps(&b_shuffled[i * 32 + 24]);
-    sum = _mm256_fmadd_ps(va_ps_3, vb_3, sum);
+    sum_1 = _mm256_fmadd_ps(va_ps_3, vb_3, sum_1);
   }
-  return _mm256_reduce_add_ps_float(sum);
+  return _mm256_reduce_add_ps_float(_mm256_add_ps(sum_0, sum_1));
 }
 
 int main(int argc, char **argv)
@@ -811,7 +812,7 @@ int main(int argc, char **argv)
 
   {
     const uint32_t n = n_hidden;
-    uint32_t num_iterations = 1e5;
+    uint32_t num_iterations = 1e6;
 
     int8_t *a = (int8_t *)aligned_alloc(cache_line_bytes, n * sizeof(int8_t));
     float *b = (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
