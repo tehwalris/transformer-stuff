@@ -14,6 +14,8 @@ const uint32_t cache_line_bytes = 64;
 const uint32_t n_ff = ((2 * (4 * n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
 const float dot_product_scale = 1.0f / std::sqrt(float(n_hidden) / float(n_heads));
 
+static float table_f32_f16[1 << 16];
+
 float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
 {
   float sum = 0.0;
@@ -124,7 +126,7 @@ typedef struct
 
 inline void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
 {
-  float d = ggml_fp16_to_fp32(quantized->d);
+  float d = table_f32_f16[quantized->d];
   for (int j = 0; j < QK8_0; ++j)
   {
     output[j] = float(quantized->qs[j]) * d;
@@ -171,7 +173,7 @@ inline __m256 dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b, __m256 o
   __m256i summed_products = _mm256_maddubs_epi16(abs_a, b_times_sign_a);
   __m256 sum = _mm256i_reduce_add_int16_t_float(summed_products);
 
-  __m256 scale = _mm256_set1_ps(ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d));
+  __m256 scale = _mm256_set1_ps(table_f32_f16[a->d] * table_f32_f16[b->d]);
   return _mm256_fmadd_ps(sum, scale, out_accumulator);
 }
 
@@ -757,17 +759,13 @@ int main(int argc, char **argv)
   temp_fast.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp_fast.quantized_vec = (block_q8_0 *)aligned_alloc(cache_line_bytes, (n_ff / QK8_0) * sizeof(block_q8_0));
 
+  for (uint16_t i = 0; true; i++)
   {
-    uint32_t num_iterations = 1000;
-    auto start = std::chrono::high_resolution_clock::now();
-    for (uint32_t i = 0; i < num_iterations; i++)
+    table_f32_f16[i] = ggml_fp16_to_fp32(i);
+    if (i == UINT16_MAX)
     {
-      matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(
-          weights.layers[0].q, temp_fast.norm_residual, temp_fast.q, temp_fast.quantized_vec);
+      break;
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    printf("Time per iteration: %f ms\n", elapsed.count() / num_iterations * 1000.0f);
   }
 
   float *token_probs = (float *)aligned_alloc(cache_line_bytes, n_vocab * sizeof(float));
@@ -782,6 +780,19 @@ int main(int argc, char **argv)
 
   printf("Initialized\n");
   fflush(stdout);
+
+  {
+    uint32_t num_iterations = 1000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(
+          weights.layers[0].q, temp_fast.norm_residual, temp_fast.q, temp_fast.quantized_vec);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    printf("Time per iteration: %f ms\n", elapsed.count() / num_iterations * 1000.0f);
+  }
 
   const uint32_t max_input_tokens = 1000;
   std::string input_string = " How are you";
