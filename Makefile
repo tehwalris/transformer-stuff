@@ -39,8 +39,8 @@ endif
 # Compile flags
 #
 
-CFLAGS   = -g -I.              -O3 -std=c17 -ffast-math   -fPIC
-CXXFLAGS = -g -I. -I./examples -O3 -std=c++17 -ffast-math -fPIC
+CFLAGS   = -g -I.              -O3 -std=c17    -fPIC
+CXXFLAGS = -g -I. -I./examples -O3 -std=c++17  -fPIC
 LDFLAGS  =
 
 ifndef LLAMA_DEBUG
@@ -93,8 +93,8 @@ endif
 #       feel free to update the Makefile for your architecture and send a pull request or issue
 ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686))
 	# Use all CPU extensions that are available:
-	CFLAGS   += -march=native -mtune=native -mavx2 -mfma
-	CXXFLAGS += -march=native -mtune=native -mavx2 -mfma
+	CFLAGS   += -march=native -mtune=native -mavx2 -mfma -mf16c
+	CXXFLAGS += -march=native -mtune=native -mavx2 -mfma -mf16c
 
 	# Usage AVX-only
 	#CFLAGS   += -mfma -mf16c -mavx
