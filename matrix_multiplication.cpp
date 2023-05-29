@@ -132,13 +132,20 @@ void matrix_vector_multiply_quantized(block_q8_0 *mat_in, float *vec_in, float *
 
 void apply_rope(uint32_t new_i, float *vec)
 {
-  assert(n_hidden % 2 == 0);
+  assert(n_hidden % n_heads == 0);
+  assert((n_hidden / n_heads) % 2 == 0);
 
-  float theta_scale = powf(10000.0, -2.0f / float(n_hidden));
+  float theta_scale = powf(10000.0, -2.0f / (float(n_hidden) / float(n_heads)));
 
-  float theta = float(new_i);
+  float theta;
   for (uint32_t i = 0; i < n_hidden; i += 2)
   {
+    if (i % (n_hidden / n_heads) == 0)
+    {
+      // RoPE is applied separately to each head
+      theta = float(new_i);
+    }
+
     float cos_theta = std::cos(theta);
     float sin_theta = std::sin(theta);
 
