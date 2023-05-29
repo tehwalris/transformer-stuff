@@ -24,7 +24,7 @@ float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
   return sum;
 }
 
-float _mm256_reduce_add_ps_float(__m256 vec)
+inline float _mm256_reduce_add_ps_float(__m256 vec)
 {
   __attribute__((aligned(32))) float values[8];
   _mm256_store_ps(values, vec);
@@ -37,7 +37,7 @@ float _mm256_reduce_add_ps_float(__m256 vec)
   return sum;
 }
 
-int32_t _mm256i_reduce_add_int16_t_int32_t(__m256i vec)
+inline int32_t _mm256i_reduce_add_int16_t_int32_t(__m256i vec)
 {
   __attribute__((aligned(32))) int16_t values[16];
   _mm256_store_si256((__m256i *)values, vec);
@@ -50,7 +50,7 @@ int32_t _mm256i_reduce_add_int16_t_int32_t(__m256i vec)
   return sum;
 }
 
-__m256 _mm256i_reduce_add_int16_t_float(__m256i vec)
+inline __m256 _mm256i_reduce_add_int16_t_float(__m256i vec)
 {
   // from ggml sum_i16_pairs_float
   const __m256i summed_pairs = _mm256_madd_epi16(_mm256_set1_epi16(1), vec);
@@ -122,7 +122,7 @@ typedef struct
   int8_t qs[QK8_0]; // quants
 } block_q8_0;
 
-static void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
+inline void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
 {
   float d = ggml_fp16_to_fp32(quantized->d);
   for (int j = 0; j < QK8_0; ++j)
@@ -131,7 +131,7 @@ static void from_quantized_block_q8_0(block_q8_0 *quantized, float *output)
   }
 }
 
-static void to_quantized_block_q8_0(float *input, block_q8_0 *quantized)
+inline void to_quantized_block_q8_0(float *input, block_q8_0 *quantized)
 {
   float d = 0.0;
   for (int j = 0; j < QK8_0; ++j)
@@ -159,7 +159,7 @@ float dot_product_block_q8_0_baseline(block_q8_0 *a, block_q8_0 *b)
   return sum * ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d);
 }
 
-__m256 dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b)
+inline __m256 dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b, __m256 out_accumulator)
 {
   __m256i qa = _mm256_loadu_si256((__m256i *)a->qs);
   __m256i qb = _mm256_loadu_si256((__m256i *)b->qs);
@@ -171,7 +171,8 @@ __m256 dot_product_block_q8_0_fast(block_q8_0 *a, block_q8_0 *b)
   __m256i summed_products = _mm256_maddubs_epi16(abs_a, b_times_sign_a);
   __m256 sum = _mm256i_reduce_add_int16_t_float(summed_products);
 
-  return _mm256_mul_ps(sum, _mm256_set1_ps(ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d)));
+  __m256 scale = _mm256_set1_ps(ggml_fp16_to_fp32(a->d) * ggml_fp16_to_fp32(b->d));
+  return _mm256_fmadd_ps(sum, scale, out_accumulator);
 }
 
 // Multiply an m x n matrix with an n element vector and store the result in an m element vector.
@@ -211,8 +212,7 @@ void matrix_vector_multiply_quantized_fast(block_q8_0 *mat_in, float *vec_in, fl
     __m256 sum = _mm256_setzero_ps();
     for (uint32_t i_block = 0; i_block < n / QK8_0; i_block++)
     {
-      __m256 sum_block = dot_product_block_q8_0_fast(&mat_in[(i_row * n) / QK8_0 + i_block], &temp_vec_in_quantized[i_block]);
-      sum = _mm256_add_ps(sum, sum_block);
+      sum = dot_product_block_q8_0_fast(&mat_in[(i_row * n) / QK8_0 + i_block], &temp_vec_in_quantized[i_block], sum);
     }
     vec_out[i_row] = _mm256_reduce_add_ps_float(sum);
   }
@@ -435,7 +435,7 @@ void transformer_layer_fast(uint32_t new_i, float *new_hidden,
   {
     temp.l3[i] *= silu(temp.l1[i]);
   }
-  matrix_vector_multiply_quantized<n_hidden, n_ff>(w.l2, temp.l3, temp.l2);
+  matrix_vector_multiply_quantized_fast<n_hidden, n_ff>(w.l2, temp.l3, temp.l2, temp.quantized_vec);
 
   // Residual
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -756,6 +756,19 @@ int main(int argc, char **argv)
   temp_fast.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
   temp_fast.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
   temp_fast.quantized_vec = (block_q8_0 *)aligned_alloc(cache_line_bytes, (n_ff / QK8_0) * sizeof(block_q8_0));
+
+  {
+    uint32_t num_iterations = 1000;
+    auto start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(
+          weights.layers[0].q, temp_fast.norm_residual, temp_fast.q, temp_fast.quantized_vec);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    printf("Time per iteration: %f ms\n", elapsed.count() / num_iterations * 1000.0f);
+  }
 
   float *token_probs = (float *)aligned_alloc(cache_line_bytes, n_vocab * sizeof(float));
 
