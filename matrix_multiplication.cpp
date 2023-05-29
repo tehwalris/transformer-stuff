@@ -940,7 +940,7 @@ int main(int argc, char **argv)
 
   llama_token last_token = input_tokens[0];
 
-  uint32_t timing_group_size = 5;
+  uint32_t timing_group_size = 10;
   auto start_group = std::chrono::high_resolution_clock::now();
   for (uint32_t i_context = 0; i_context < n_context; i_context++)
   {
