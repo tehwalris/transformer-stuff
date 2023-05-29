@@ -179,14 +179,7 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
     {
       for (uint32_t i_head = 0; i_head < n_heads; i_head++)
       {
-        temp_dot_product[i_head * n_context + i_context] = -INFINITY;
-      }
-    }
-  }
-
-  for (uint32_t i = 0; i < n_heads; i++)
-  {
-    softmax(n_context, &temp_dot_product[i * n_context]);
+    softmax(new_i + 1, &temp_dot_product[i_head * n_context]);
   }
 
   // Calculate the weighted sum of the cached V
@@ -194,7 +187,7 @@ void attention_baseline(uint32_t new_i, float *new_q, float *new_k, float *new_v
   {
     out[i] = 0.0f;
   }
-  for (uint32_t i_context = 0; i_context < n_context; i_context++)
+  for (uint32_t i_context = 0; i_context <= new_i; i_context++)
   {
     for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
@@ -304,7 +297,6 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
 {
   // Norm before attention
   rms_norm<n_hidden>(new_hidden, temp.norm_residual);
-
   for (uint32_t i = 0; i < n_hidden; i++)
   {
     temp.norm_residual[i] *= w.attention_norm[i];
@@ -320,7 +312,10 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   apply_rope(new_i, temp.k);
 
   // Attention
-  attention_baseline(new_i, temp.q, temp.k, temp.v, cache_k, cache_v, temp.dot_product, temp.attention_result);
+  attention_baseline(new_i, temp.q, temp.k, temp.v,
+                     cache_k, cache_v,
+                     temp.dot_product,
+                     temp.attention_result);
 
   // Projection and residual
   matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
@@ -339,6 +334,7 @@ void transformer_layer_baseline(uint32_t new_i, float *new_hidden,
   // Feed forward
   matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l1, temp.norm_residual, temp.l1);
   matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l3, temp.norm_residual, temp.l3);
+
   for (uint32_t i = 0; i < n_ff; i++)
   {
     temp.l3[i] *= silu(temp.l1[i]);
