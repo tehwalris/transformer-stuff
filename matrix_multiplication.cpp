@@ -711,6 +711,27 @@ llama_context *load_llama_model(char *model_path, TransformerWholeWeights *weigh
   return lctx;
 }
 
+float thing_baseline(uint32_t n, int8_t *a, float *b)
+{
+  float sum = 0.0f;
+  for (uint32_t i = 0; i < n; i++)
+  {
+    sum += float(a[i]) * b[i];
+  }
+  return sum;
+}
+
+template <uint32_t n>
+float thing_fast(int8_t *a, float *b)
+{
+  float sum = 0.0f;
+  for (uint32_t i = 0; i < n; i++)
+  {
+    sum += float(a[i]) * b[i];
+  }
+  return sum;
+}
+
 int main(int argc, char **argv)
 {
   if (argc != 2)
@@ -731,13 +752,6 @@ int main(int argc, char **argv)
   assert(n_context % QK8_0 == 0);
   assert(n_ff > n_hidden);
   assert(n_ff % QK8_0 == 0);
-
-  llama_init_backend();
-  TransformerWholeWeights weights;
-  llama_context *lctx = load_llama_model(model_path, &weights);
-
-  printf("Loaded model\n");
-  fflush(stdout);
 
   // TempBaseline temp_baseline;
   // temp_baseline.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
@@ -772,6 +786,54 @@ int main(int argc, char **argv)
   temp_fast.quantized_vec_qs = (int8_t *)aligned_alloc(cache_line_bytes, n_ff * sizeof(int8_t));
   temp_fast.quantized_vec_d = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
 
+  {
+    const uint32_t n = n_hidden;
+    uint32_t num_iterations = 1e5;
+
+    int8_t *a = (int8_t *)aligned_alloc(cache_line_bytes, n * sizeof(int8_t));
+    float *b = (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
+
+    fill_rand_int8<n>(a);
+    for (uint32_t i = 0; i < n; i++)
+    {
+      b[i] = (float)rand_float_neg_1_1();
+    }
+
+    std::chrono::high_resolution_clock::time_point start, end;
+    float result_baseline, result_fast;
+
+    start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      result_baseline = thing_baseline(n, a, b);
+    }
+    end = std::chrono::high_resolution_clock::now();
+    {
+      std::chrono::duration<double> elapsed = end - start;
+      printf("thing_baseline: %f ms per iteration; result %f\n", elapsed.count() / num_iterations * 1000.0f, result_baseline);
+    }
+
+    start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      result_fast = thing_fast<n>(a, b);
+    }
+    end = std::chrono::high_resolution_clock::now();
+    {
+      std::chrono::duration<double> elapsed = end - start;
+      printf("thing_fast: %f ms per iteration; result %f\n", elapsed.count() / num_iterations * 1000.0f, result_fast);
+    }
+
+    return 0;
+  }
+
+  llama_init_backend();
+  TransformerWholeWeights weights;
+  llama_context *lctx = load_llama_model(model_path, &weights);
+
+  printf("Loaded model\n");
+  fflush(stdout);
+
   for (uint16_t i = 0; true; i++)
   {
     table_f32_f16[i] = ggml_fp16_to_fp32(i);
@@ -793,19 +855,6 @@ int main(int argc, char **argv)
 
   printf("Initialized\n");
   fflush(stdout);
-
-  {
-    uint32_t num_iterations = 1000;
-    auto start = std::chrono::high_resolution_clock::now();
-    for (uint32_t i = 0; i < num_iterations; i++)
-    {
-      matrix_vector_multiply_quantized_fast<n_hidden, n_hidden>(
-          weights.layers[0].q, temp_fast.norm_residual, temp_fast.q, temp_fast.quantized_vec_qs, temp_fast.quantized_vec_d);
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    printf("Time per iteration: %f ms\n", elapsed.count() / num_iterations * 1000.0f);
-  }
 
   const uint32_t max_input_tokens = 1000;
   std::string input_string = " How are you";
