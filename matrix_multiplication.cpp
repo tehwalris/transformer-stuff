@@ -173,19 +173,15 @@ inline __m256 dot_product_block_q8_0_fast(block_q8_0 *a, int8_t *b_qs, float b_d
   __m256i qa = _mm256_loadu_si256((__m256i *)a->qs);
   __m256i qb = _mm256_load_si256((__m256i *)b_qs);
 
-  // From ggml mul_sum_i8_pairs_float
   __m256i abs_a = _mm256_sign_epi8(qa, qa);
   __m256i b_times_sign_a = _mm256_sign_epi8(qb, qa);
 
   __m256i summed_products = _mm256_maddubs_epi16(abs_a, b_times_sign_a);
-  __m256 sum = _mm256i_reduce_add_int16_t_float(summed_products);
-
-  // __m256 fake_sum = _mm256_add_ps(_mm256_loadu_ps((float *)a->qs), _mm256_loadu_ps((float *)b_qs));
+  __m256i summed_product_pairs = _mm256_madd_epi16(_mm256_set1_epi16(1), summed_products);
+  __m256 sum = _mm256_cvtepi32_ps(summed_product_pairs);
 
   __m256 scale = _mm256_set1_ps(table_f32_f16[a->d] * b_d);
   return _mm256_fmadd_ps(sum, scale, out_accumulator);
-  // return _mm256_fmadd_ps(fake_sum, scale, out_accumulator);
-  // return _mm256_add_ps(fake_sum, out_accumulator);
 }
 
 // Multiply an m x n matrix with an n element vector and store the result in an m element vector.
