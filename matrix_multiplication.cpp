@@ -223,11 +223,14 @@ void attention_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
     for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
       uint32_t head_offset = i_head * (n_hidden / n_heads);
-      temp_dot_product[i_context * n_heads + i_head] = dot_product_scale * vector_dot_product_fast<n_hidden / n_heads>(&new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
+      temp_dot_product[i_head * n_context + i_context] = dot_product_scale * vector_dot_product_fast<n_hidden / n_heads>(&new_q[head_offset], &cache_k[i_context * n_hidden + head_offset]);
     }
   }
 
-  softmax(n_context, temp_dot_product);
+  for (uint32_t i_head = 0; i_head < n_heads; i_head++)
+  {
+    softmax(new_i + 1, &temp_dot_product[i_head * n_context]);
+  }
 
   // Calculate the weighted sum of the cached V
   for (uint32_t i = 0; i < n_hidden; i++)
@@ -238,7 +241,7 @@ void attention_fast(uint32_t new_i, float *new_q, float *new_k, float *new_v,
   {
     for (uint32_t i_head = 0; i_head < n_heads; i_head++)
     {
-      __m256 weight = _mm256_set1_ps(temp_dot_product[i_context * n_heads + i_head]);
+      __m256 weight = _mm256_set1_ps(temp_dot_product[i_head * n_context + i_context]);
       for (uint32_t i_hidden = 0; i_hidden < n_hidden / n_heads; i_hidden += 16)
       {
         uint32_t offset = i_head * (n_hidden / n_heads) + i_hidden;
@@ -275,6 +278,125 @@ struct TransformerWholeWeights
   float *model_norm;               // n_hidden
   block_q8_0 *output_layer;        // n_hidden * n_vocab
 };
+
+struct TempFast
+{
+  float *embedding_0;      // n_hidden
+  float *embedding_1;      // n_hidden
+  float *dot_product;      // n_heads * n_context
+  float *norm_residual;    // n_hidden
+  float *attention_result; // n_hidden
+  float *q;                // n_hidden
+  float *k;                // n_hidden
+  float *v;                // n_hidden
+  float *o;                // n_hidden
+  float *l1;               // n_ff
+  float *l2;               // n_hidden
+  float *l3;               // n_ff
+  float *model_norm;       // n_hidden
+};
+
+void transformer_layer_fast(uint32_t new_i, float *new_hidden,
+                            TransformerLayerWeights &w,
+                            float *cache_k, float *cache_v,
+                            TempFast &temp,
+                            float *out)
+{
+  // Norm before attention
+  rms_norm<n_hidden>(new_hidden, temp.norm_residual);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    temp.norm_residual[i] *= w.attention_norm[i];
+  }
+
+  // Compute Q, K, V
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.q, temp.norm_residual, temp.q);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.k, temp.norm_residual, temp.k);
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.v, temp.norm_residual, temp.v);
+
+  // Apply RoPE
+  apply_rope(new_i, temp.q);
+  apply_rope(new_i, temp.k);
+
+  // Attention
+  attention_fast(new_i, temp.q, temp.k, temp.v,
+                 cache_k, cache_v,
+                 temp.dot_product,
+                 temp.attention_result);
+
+  // Projection and residual
+  matrix_vector_multiply_quantized<n_hidden, n_hidden>(w.o, temp.attention_result, temp.o);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    temp.o[i] += new_hidden[i];
+  }
+
+  // Norm before feed forward
+  rms_norm<n_hidden>(temp.o, temp.norm_residual);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    temp.norm_residual[i] *= w.ff_norm[i];
+  }
+
+  // Feed forward
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l1, temp.norm_residual, temp.l1);
+  matrix_vector_multiply_quantized<n_ff, n_hidden>(w.l3, temp.norm_residual, temp.l3);
+
+  for (uint32_t i = 0; i < n_ff; i++)
+  {
+    temp.l3[i] *= silu(temp.l1[i]);
+  }
+  matrix_vector_multiply_quantized<n_hidden, n_ff>(w.l2, temp.l3, temp.l2);
+
+  // Residual
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    out[i] = temp.l2[i] + temp.o[i];
+  }
+}
+
+void transformer_whole_fast(uint32_t new_i, uint32_t new_token,
+                            TransformerWholeWeights &w,
+                            float *cache_k, float *cache_v,
+                            TempFast &temp,
+                            float *out)
+{
+  float *embedding_in = temp.embedding_0;
+  float *embedding_out = temp.embedding_1;
+  float *last_layer_embedding_out = nullptr;
+
+  assert(n_hidden % QK8_0 == 0);
+  for (uint32_t i = 0; i < n_hidden; i += QK8_0)
+  {
+    float block[QK8_0];
+    from_quantized_block_q8_0(&w.token_embeddings[(new_token * n_hidden + i) / QK8_0], block);
+    for (uint32_t i_offset = 0; i_offset < QK8_0; i_offset++)
+    {
+      embedding_in[i + i_offset] = block[i_offset];
+    }
+  }
+
+  for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
+  {
+    transformer_layer_fast(new_i, embedding_in,
+                           w.layers[i_layer],
+                           &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
+                           temp,
+                           embedding_out);
+
+    last_layer_embedding_out = embedding_out;
+    float *temp = embedding_in;
+    embedding_in = embedding_out;
+    embedding_out = temp;
+  }
+
+  rms_norm<n_hidden>(last_layer_embedding_out, temp.model_norm);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    temp.model_norm[i] *= w.model_norm[i];
+  }
+  matrix_vector_multiply_quantized<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
+}
 
 struct TempBaseline
 {
@@ -513,20 +635,35 @@ int main(int argc, char **argv)
   printf("Loaded model\n");
   fflush(stdout);
 
-  TempBaseline temp;
-  temp.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.dot_product = (float *)aligned_alloc(cache_line_bytes, n_heads * n_context * sizeof(float));
-  temp.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.attention_result = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.k = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.o = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
-  temp.l2 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
-  temp.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
-  temp.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  TempBaseline temp_baseline;
+  temp_baseline.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.dot_product = (float *)aligned_alloc(cache_line_bytes, n_heads * n_context * sizeof(float));
+  temp_baseline.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.attention_result = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.k = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.o = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp_baseline.l2 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_baseline.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp_baseline.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+
+  TempFast temp_fast;
+  temp_fast.embedding_0 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.embedding_1 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.dot_product = (float *)aligned_alloc(cache_line_bytes, n_heads * n_context * sizeof(float));
+  temp_fast.norm_residual = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.attention_result = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.q = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.k = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.v = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.o = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.l1 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp_fast.l2 = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
+  temp_fast.l3 = (float *)aligned_alloc(cache_line_bytes, n_ff * sizeof(float));
+  temp_fast.model_norm = (float *)aligned_alloc(cache_line_bytes, n_hidden * sizeof(float));
 
   float *token_probs = (float *)aligned_alloc(cache_line_bytes, n_vocab * sizeof(float));
 
@@ -574,7 +711,8 @@ int main(int argc, char **argv)
     printf("%s", llama_token_to_str(lctx, input_token));
     fflush(stdout);
 
-    transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp, token_probs);
+    // transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_baseline, token_probs);
+    transformer_whole_fast(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_fast, token_probs);
     llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
 
     last_token = output_token;
