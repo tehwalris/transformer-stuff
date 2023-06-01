@@ -224,5 +224,5 @@ clean:
 matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 
-cuda_example: cuda_example.cpp
-	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+cuda_example: cuda_example.cu
+	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic $(filter-out %.h,$^) -o $@ $(LDFLAGS)
