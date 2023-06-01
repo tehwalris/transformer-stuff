@@ -757,7 +757,7 @@ llama_context *load_llama_model(char *model_path, TransformerWholeWeights *weigh
 {
   auto lparams = llama_context_default_params();
   lparams.n_ctx = n_context;
-  lparams.n_gpu_layers = 0;
+  lparams.n_gpu_layers = 28;
   lparams.seed = 0;
   lparams.f16_kv = false;
   lparams.use_mmap = true;
@@ -926,7 +926,7 @@ int main(int argc, char **argv)
   fflush(stdout);
 
   const uint32_t max_input_tokens = 1000;
-  std::string input_string = " Walrus";
+  std::string input_string = "5 JavaScript edge cases that broke prod\n";
   llama_token input_tokens[max_input_tokens];
   uint32_t n_input_tokens = llama_tokenize(lctx, input_string.c_str(), input_tokens, max_input_tokens, true);
   assert(n_input_tokens >= 1);
@@ -940,7 +940,7 @@ int main(int argc, char **argv)
 
   llama_token last_token = input_tokens[0];
 
-  uint32_t timing_group_size = 10;
+  uint32_t timing_group_size = 100;
   auto start_group = std::chrono::high_resolution_clock::now();
   for (uint32_t i_context = 0; i_context < n_context; i_context++)
   {
@@ -959,9 +959,12 @@ int main(int argc, char **argv)
     printf("%s", llama_token_to_str(lctx, input_token));
     fflush(stdout);
 
-    // transformer_whole_baseline(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_baseline, token_probs);
-    transformer_whole_fast(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_fast, token_probs);
-    llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+    // transformer_whole_fast(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_fast, token_probs);
+    // llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+
+    llama_eval(lctx, &input_token, 1, i_context, 4);
+    float *logits = llama_get_logits(lctx);
+    llama_token output_token = llama_token(std::max_element(logits, logits + n_vocab) - logits);
 
     last_token = output_token;
   }
