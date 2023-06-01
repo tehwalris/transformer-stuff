@@ -4,11 +4,19 @@
 #include <chrono>
 
 // function to add the elements of two arrays
-__global__ void add(int n, float *x, float *y)
+__global__ void add_gpu(int n, float *x, float *y)
 {
-  int index = threadIdx.x;
-  int stride = blockDim.x;
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
   for (int i = index; i < n; i += stride)
+  {
+    y[i] = x[i] + y[i];
+  }
+}
+
+void add_cpu(int n, float *x, float *y)
+{
+  for (int i = 0; i < n; i++)
   {
     y[i] = x[i] + y[i];
   }
@@ -16,40 +24,75 @@ __global__ void add(int n, float *x, float *y)
 
 int main(void)
 {
-  int N = 1 << 20; // 1M elements
+  int N = int(1e8);
+  uint32_t num_iterations = 10;
 
   float *x, *y;
   cudaMallocManaged(&x, N * sizeof(float));
   cudaMallocManaged(&y, N * sizeof(float));
 
-  // initialize x and y arrays on the host
   for (int i = 0; i < N; i++)
   {
     x[i] = 1.0f;
     y[i] = 2.0f;
   }
 
-  add<<<1, 256>>>(N, x, y);
-  cudaDeviceSynchronize();
-
-  // Check for errors (all values should be 3.0f)
-  float maxError = 0.0f;
-  for (int i = 0; i < N; i++)
-    maxError = fmax(maxError, fabs(y[i] - 3.0f));
-  std::cout << "Max error: " << maxError << std::endl;
-
-  printf("Starting benchmark\n");
-  uint32_t num_iterations = 30;
-  auto start = std::chrono::high_resolution_clock::now();
-  for (uint32_t i = 0; i < num_iterations; i++)
+  // GPU version
   {
-    add<<<1, 1>>>(N, x, y);
-    cudaDeviceSynchronize();
-  }
-  auto end = std::chrono::high_resolution_clock::now();
+    int block_size = 256;
+    int num_blocks = (N + block_size - 1) / block_size;
 
-  std::chrono::duration<double> elapsed = end - start;
-  printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
+    add_gpu<<<num_blocks, block_size>>>(N, x, y);
+    cudaDeviceSynchronize();
+
+    // Check for errors (all values should be 3.0f)
+    float maxError = 0.0f;
+    for (int i = 0; i < N; i++)
+    {
+      maxError = fmax(maxError, fabs(y[i] - 3.0f));
+    }
+    std::cout << "Max error: " << maxError << std::endl;
+
+    printf("Starting GPU benchmark\n");
+    auto start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      add_gpu<<<num_blocks, block_size>>>(N, x, y);
+      cudaDeviceSynchronize();
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
+  }
+
+  for (int i = 0; i < N; i++)
+  {
+    x[i] = 1.0f;
+    y[i] = 2.0f;
+  }
+
+  // CPU version
+  {
+    add_cpu(N, x, y);
+
+    float maxError = 0.0f;
+    for (int i = 0; i < N; i++)
+    {
+      maxError = fmax(maxError, fabs(y[i] - 3.0f));
+    }
+    std::cout << "Max error: " << maxError << std::endl;
+
+    printf("Starting CPU benchmark\n");
+
+    auto start = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++)
+    {
+      add_cpu(N, x, y);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
+  }
 
   // Free memory
   cudaFree(x);
