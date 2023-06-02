@@ -2,8 +2,22 @@
 #include <math.h>
 #include <stdio.h>
 #include <chrono>
+#include <cassert>
 
-__global__ void init_cuda(int n, float *A, float *x, float *y)
+#define CUDA_CHECK(err)                                                         \
+  do                                                                            \
+  {                                                                             \
+    cudaError_t err_ = (err);                                                   \
+    if (err_ != cudaSuccess)                                                    \
+    {                                                                           \
+      fprintf(stderr, "CUDA error %d at %s:%d: %s\n", err_, __FILE__, __LINE__, \
+              cudaGetErrorString(err_));                                        \
+      exit(1);                                                                  \
+    }                                                                           \
+  } while (0)
+
+__global__ void
+init_cuda(int n, float *A, float *x, float *y)
 {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
@@ -33,6 +47,29 @@ void init_cpu(int n, float *A, float *x, float *y)
 
 __global__ void mul_gpu(int n, float const *__restrict__ A, float const *__restrict__ x, float *__restrict__ y)
 {
+  __shared__ float sdata[16][16];
+
+  int i = blockIdx.y * blockDim.y + threadIdx.y;
+  int j = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
+
+  if (i < n && j < n)
+  {
+    sdata[threadIdx.y][threadIdx.x] = A[i * n + j] * x[j] + A[i * n + j + blockDim.x] * x[j + blockDim.x];
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+      if (threadIdx.x < s)
+      {
+        sdata[threadIdx.y][threadIdx.x] += sdata[threadIdx.y][threadIdx.x + s];
+      }
+      __syncthreads();
+    }
+    if (threadIdx.x == 0)
+    {
+      atomicAdd(&y[i], sdata[threadIdx.y][0]);
+    }
+  }
 }
 
 void mul_cpu(int n, float *A, float *x, float *y)
@@ -50,22 +87,23 @@ void mul_cpu(int n, float *A, float *x, float *y)
 
 int main(void)
 {
-  int N = 256;
+  int N = 4096;
   uint32_t num_iterations = 10;
 
   // GPU version
   {
     float *A, *x, *y;
-    cudaMallocManaged(&A, N * N * sizeof(float));
-    cudaMallocManaged(&x, N * sizeof(float));
-    cudaMallocManaged(&y, N * sizeof(float));
+    CUDA_CHECK(cudaMallocManaged(&A, N * N * sizeof(float)));
+    CUDA_CHECK(cudaMallocManaged(&x, N * sizeof(float)));
+    CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
 
-    int block_size = 192;
-    int num_blocks = (N + block_size - 1) / block_size;
+    assert(N % 2 == 0);
+    dim3 block_size(16, 16);
+    dim3 grid_size((N / 2 + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
 
-    init_cuda<<<num_blocks, block_size>>>(N, A, x, y);
-    mul_gpu<<<num_blocks, block_size>>>(N, A, x, y);
-    cudaDeviceSynchronize();
+    init_cuda<<<grid_size, block_size>>>(N, A, x, y);
+    mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     float sum_y = 0.0f;
     for (int i = 0; i < N; i++)
@@ -74,24 +112,24 @@ int main(void)
     }
     std::cout << "GPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << std::endl;
 
-    cudaMemPrefetchAsync(A, N * N * sizeof(float), 0);
-    cudaMemPrefetchAsync(x, N * sizeof(float), 0);
-    cudaMemPrefetchAsync(y, N * sizeof(float), 0);
+    CUDA_CHECK(cudaMemPrefetchAsync(A, N * N * sizeof(float), 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(x, N * sizeof(float), 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(y, N * sizeof(float), 0));
 
     printf("Starting GPU benchmark\n");
     auto start = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_iterations; i++)
     {
-      mul_gpu<<<num_blocks, block_size>>>(N, A, x, y);
-      cudaDeviceSynchronize();
+      mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
+      CUDA_CHECK(cudaDeviceSynchronize());
     }
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
 
-    cudaFree(A);
-    cudaFree(x);
-    cudaFree(y);
+    CUDA_CHECK(cudaFree(A));
+    CUDA_CHECK(cudaFree(x));
+    CUDA_CHECK(cudaFree(y));
   }
 
   // CPU version
