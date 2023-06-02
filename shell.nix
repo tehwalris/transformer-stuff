@@ -4,5 +4,6 @@ pkgs.mkShell {
     gcc
     cudatoolkit
     gdb
+    cudaPackages.nsight_compute
   ];
 }
