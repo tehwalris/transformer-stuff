@@ -50,7 +50,7 @@ __global__ void mul_gpu(int n, char4 const *__restrict__ A, char4 const *__restr
   for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n; i_row += blockDim.y * gridDim.y)
   {
     int sum = 0;
-    for (int i_col = blockIdx.x * blockDim.x + threadIdx.x; i_col < n / 4; i_col += blockDim.x * gridDim.x)
+    for (int i_col = threadIdx.x; i_col < n / 4; i_col += blockDim.x)
     {
       sum = __dp4a(A[(i_row * n) / 4 + i_col], x[i_col], sum);
     }
@@ -102,7 +102,7 @@ int main(void)
 
     assert(N % 4 == 0);
     dim3 block_size(32, 8);
-    dim3 grid_size((N / 4 + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
+    dim3 grid_size(1, (N + block_size.y - 1) / block_size.y);
 
     mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
     CUDA_CHECK(cudaDeviceSynchronize());
