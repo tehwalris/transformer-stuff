@@ -47,30 +47,30 @@ void init_cpu(int n, float *A, float *x, float *y)
 
 __global__ void mul_gpu(int n, float const *__restrict__ A, float const *__restrict__ x, float *__restrict__ y)
 {
-  __shared__ float reduction[32];
+  __shared__ float reduction[8][32];
 
-  int i_row = blockIdx.y;
+  int i_row = threadIdx.y + blockIdx.y * blockDim.y;
 
   float sum = 0.0f;
   for (int i_col = threadIdx.x; i_col < n; i_col += blockDim.x)
   {
     sum += A[i_row * n + i_col] * x[i_col];
   }
-  reduction[threadIdx.x] = sum;
+  reduction[threadIdx.y][threadIdx.x] = sum;
   __syncthreads();
 
   for (int s = blockDim.x / 2; s > 0; s >>= 1)
   {
     if (threadIdx.x < s)
     {
-      reduction[threadIdx.x] += reduction[threadIdx.x + s];
+      reduction[threadIdx.y][threadIdx.x] += reduction[threadIdx.y][threadIdx.x + s];
     }
     __syncthreads();
   }
 
   if (threadIdx.x == 0)
   {
-    atomicAdd(&y[i_row], reduction[0]);
+    atomicAdd(&y[i_row], reduction[threadIdx.y][0]);
   }
 }
 
@@ -100,8 +100,8 @@ int main(void)
     CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
 
     assert(N % 2 == 0);
-    dim3 block_size(32, 1);
-    dim3 grid_size(1, N);
+    dim3 block_size(32, 8);
+    dim3 grid_size(1, (N + block_size.y - 1) / block_size.y);
 
     init_cuda<<<grid_size, block_size>>>(N, A, x, y);
     mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
