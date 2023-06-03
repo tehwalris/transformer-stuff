@@ -49,15 +49,12 @@ __global__ void mul_gpu(int n, char4 const *__restrict__ A, char4 const *__restr
 {
   for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n; i_row += blockDim.y * gridDim.y)
   {
-    float sum = 0.0f;
+    int sum = 0;
     for (int i_col = blockIdx.x * blockDim.x + threadIdx.x; i_col < n / 4; i_col += blockDim.x * gridDim.x)
     {
-      sum += int(A[(i_row * n) / 4 + i_col].x) * int(x[i_col].x);
-      sum += int(A[(i_row * n) / 4 + i_col].y) * int(x[i_col].y);
-      sum += int(A[(i_row * n) / 4 + i_col].z) * int(x[i_col].z);
-      sum += int(A[(i_row * n) / 4 + i_col].w) * int(x[i_col].w);
+      sum = __dp4a(A[(i_row * n) / 4 + i_col], x[i_col], sum);
     }
-    atomicAdd(&y[i_row], sum);
+    atomicAdd(&y[i_row], float(sum));
   }
 }
 

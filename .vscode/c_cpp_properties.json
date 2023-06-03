@@ -1,15 +1,25 @@
 {
-  "configurations": [
-    {
-      "name": "Linux",
-      "includePath": ["${workspaceFolder}/**"],
-      "defines": [],
-      "compilerPath": "/nix/store/7wkshj58fcsl1f3zyi67qsxgl1p8nki1-gcc-wrapper-12.2.0/bin/g++",
-      "cStandard": "gnu17",
-      "cppStandard": "gnu++17",
-      "intelliSenseMode": "linux-gcc-x64",
-      "compilerArgs": ["-O3", "-march=native", "-mavx2", "-mfma", "-ffast-math"]
-    }
-  ],
-  "version": 4
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "defines": [
+                "__CUDA_ARCH__=610"
+            ],
+            "compilerPath": "/nix/store/7wkshj58fcsl1f3zyi67qsxgl1p8nki1-gcc-wrapper-12.2.0/bin/g++",
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerArgs": [
+                "-O3",
+                "-march=native",
+                "-mavx2",
+                "-mfma",
+                "-ffast-math"
+            ]
+        }
+    ],
+    "version": 4
 }
