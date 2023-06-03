@@ -123,8 +123,8 @@ int main(void)
     for (uint32_t i = 0; i < num_iterations; i++)
     {
       mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
-      CUDA_CHECK(cudaDeviceSynchronize());
     }
+    CUDA_CHECK(cudaDeviceSynchronize());
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
