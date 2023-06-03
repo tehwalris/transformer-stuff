@@ -47,6 +47,18 @@ void init_cpu(int n, char4 *A, char4 *x, float *y)
 
 __global__ void mul_gpu(int n, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
 {
+  for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n; i_row += blockDim.y * gridDim.y)
+  {
+    float sum = 0.0f;
+    for (int i_col = blockIdx.x * blockDim.x + threadIdx.x; i_col < n / 4; i_col += blockDim.x * gridDim.x)
+    {
+      sum += int(A[(i_row * n) / 4 + i_col].x) * int(x[i_col].x);
+      sum += int(A[(i_row * n) / 4 + i_col].y) * int(x[i_col].y);
+      sum += int(A[(i_row * n) / 4 + i_col].z) * int(x[i_col].z);
+      sum += int(A[(i_row * n) / 4 + i_col].w) * int(x[i_col].w);
+    }
+    atomicAdd(&y[i_row], sum);
+  }
 }
 
 void mul_cpu(int n, char4 *A, char4 *x, float *y)
@@ -91,9 +103,9 @@ int main(void)
       y[i] = 0.0f;
     }
 
-    assert(N % 2 == 0);
+    assert(N % 4 == 0);
     dim3 block_size(32, 8);
-    dim3 grid_size(1, (N + block_size.y - 1) / block_size.y);
+    dim3 grid_size((N / 4 + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
 
     mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
     CUDA_CHECK(cudaDeviceSynchronize());
