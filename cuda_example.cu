@@ -16,94 +16,85 @@
     }                                                                           \
   } while (0)
 
-__global__ void
-init_cuda(int n, float *A, float *x, float *y)
+void fill_rand_char4(int n, char4 *arr)
 {
-  int index = blockIdx.x * blockDim.x + threadIdx.x;
-  int stride = blockDim.x * gridDim.x;
-  for (int i = index; i < n; i += stride)
+  union int_char4
   {
-    for (int j = 0; j < n; j++)
-    {
-      A[i * n + j] = float(i % 5) - float(j % 7) * 0.3f;
-    }
-    x[i] = float(i % 3 - 1.2f);
+    int i;
+    char4 c;
+  };
+
+  assert(n % 4 == 0);
+  for (int i = 0; i < n; i += 4)
+  {
+    int_char4 temp;
+    temp.i = rand();
+    // HACK because rand() only generates non-negative numbers
+    temp.i *= temp.i & 1 ? 1 : -1;
+    arr[i / 4] = temp.c;
+  }
+}
+
+void init_cpu(int n, char4 *A, char4 *x, float *y)
+{
+  fill_rand_char4(n * n, A);
+  fill_rand_char4(n, x);
+  for (int i = 0; i < n; i++)
+  {
     y[i] = 0.0f;
   }
 }
 
-void init_cpu(int n, float *A, float *x, float *y)
+__global__ void mul_gpu(int n, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
+{
+}
+
+void mul_cpu(int n, char4 *A, char4 *x, float *y)
 {
   for (int i = 0; i < n; i++)
   {
-    for (int j = 0; j < n; j++)
+    int sum = 0;
+    for (int j = 0; j < n; j += 4)
     {
-      A[i * n + j] = float(i % 5) - float(j % 7) * 0.3f;
+      sum += int(A[(i * n + j) / 4].x) * int(x[j / 4].x);
+      sum += int(A[(i * n + j) / 4].y) * int(x[j / 4].y);
+      sum += int(A[(i * n + j) / 4].z) * int(x[j / 4].z);
+      sum += int(A[(i * n + j) / 4].w) * int(x[j / 4].w);
     }
-    x[i] = float(i % 3 - 1.2f);
-    y[i] = 0.0f;
-  }
-}
-
-__global__ void mul_gpu(int n, float const *__restrict__ A, float const *__restrict__ x, float *__restrict__ y)
-{
-  __shared__ float reduction[8][32];
-
-  int i_row = threadIdx.y + blockIdx.y * blockDim.y;
-
-  float sum = 0.0f;
-  for (int i_col = threadIdx.x; i_col < n; i_col += blockDim.x)
-  {
-    sum += A[i_row * n + i_col] * x[i_col];
-  }
-  reduction[threadIdx.y][threadIdx.x] = sum;
-  __syncthreads();
-
-  for (int s = blockDim.x / 2; s > 0; s >>= 1)
-  {
-    if (threadIdx.x < s)
-    {
-      reduction[threadIdx.y][threadIdx.x] += reduction[threadIdx.y][threadIdx.x + s];
-    }
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0)
-  {
-    atomicAdd(&y[i_row], reduction[threadIdx.y][0]);
-  }
-}
-
-void mul_cpu(int n, float *A, float *x, float *y)
-{
-  for (int i = 0; i < n; i++)
-  {
-    float sum = 0.0f;
-    for (int j = 0; j < n; j++)
-    {
-      sum += A[i * n + j] * x[j];
-    }
-    y[i] = sum;
+    y[i] = float(sum);
   }
 }
 
 int main(void)
 {
+  srand(0);
+
   int N = 4096;
   uint32_t num_iterations = 10;
 
+  char4 *A;
+  char4 *x;
+  float *y;
+  assert(N % 4 == 0);
+  CUDA_CHECK(cudaMallocManaged(&A, N * N / 4 * sizeof(char4)));
+  CUDA_CHECK(cudaMallocManaged(&x, N / 4 * sizeof(char4)));
+  CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
+
+  init_cpu(N, A, x, y);
+
+  mul_cpu(N, A, x, y);
+
   // GPU version
   {
-    float *A, *x, *y;
-    CUDA_CHECK(cudaMallocManaged(&A, N * N * sizeof(float)));
-    CUDA_CHECK(cudaMallocManaged(&x, N * sizeof(float)));
-    CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
+    for (int i = 0; i < N; i++)
+    {
+      y[i] = 0.0f;
+    }
 
     assert(N % 2 == 0);
     dim3 block_size(32, 8);
     dim3 grid_size(1, (N + block_size.y - 1) / block_size.y);
 
-    init_cuda<<<grid_size, block_size>>>(N, A, x, y);
     mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -114,8 +105,8 @@ int main(void)
     }
     std::cout << "GPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << std::endl;
 
-    CUDA_CHECK(cudaMemPrefetchAsync(A, N * N * sizeof(float), 0));
-    CUDA_CHECK(cudaMemPrefetchAsync(x, N * sizeof(float), 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(A, N * N / 4 * sizeof(char4), 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(x, N / 4 * sizeof(char4), 0));
     CUDA_CHECK(cudaMemPrefetchAsync(y, N * sizeof(float), 0));
 
     printf("Starting GPU benchmark\n");
@@ -128,21 +119,20 @@ int main(void)
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
-
-    CUDA_CHECK(cudaFree(A));
-    CUDA_CHECK(cudaFree(x));
-    CUDA_CHECK(cudaFree(y));
   }
 
   // CPU version
   {
-    float *A = (float *)malloc(N * N * sizeof(float));
-    float *x = (float *)malloc(N * sizeof(float));
-    float *y = (float *)malloc(N * sizeof(float));
-
-    init_cpu(N, A, x, y);
+    for (int i = 0; i < N; i++)
+    {
+      y[i] = 0.0f;
+    }
 
     mul_cpu(N, A, x, y);
+
+    CUDA_CHECK(cudaMemPrefetchAsync(A, N * N / 4 * sizeof(char4), cudaCpuDeviceId));
+    CUDA_CHECK(cudaMemPrefetchAsync(x, N / 4 * sizeof(char4), cudaCpuDeviceId));
+    CUDA_CHECK(cudaMemPrefetchAsync(y, N * sizeof(float), cudaCpuDeviceId));
 
     float sum_y = 0.0f;
     for (int i = 0; i < N; i++)
@@ -161,11 +151,11 @@ int main(void)
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     printf("%f ms per iteration\n", elapsed.count() / num_iterations * 1e3f);
-
-    free(A);
-    free(x);
-    free(y);
   }
+
+  CUDA_CHECK(cudaFree(A));
+  CUDA_CHECK(cudaFree(x));
+  CUDA_CHECK(cudaFree(y));
 
   return 0;
 }
