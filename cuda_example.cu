@@ -47,28 +47,21 @@ void init_cpu(int n, float *A, float *x, float *y)
 
 __global__ void mul_gpu(int n, float const *__restrict__ A, float const *__restrict__ x, float *__restrict__ y)
 {
-  __shared__ float sdata[16][16];
-
-  int i = blockIdx.y * blockDim.y + threadIdx.y;
-  int j = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
-
-  if (i < n && j < n)
+  __shared__ float x_shared[4096];
+  for (int i = threadIdx.x; i < n; i += blockDim.x)
   {
-    sdata[threadIdx.y][threadIdx.x] = A[i * n + j] * x[j] + A[i * n + j + blockDim.x] * x[j + blockDim.x];
-    __syncthreads();
+    x_shared[i] = x[i];
+  }
 
-    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n)
+  {
+    float sum = 0.0f;
+    for (int j = 0; j < n; j++)
     {
-      if (threadIdx.x < s)
-      {
-        sdata[threadIdx.y][threadIdx.x] += sdata[threadIdx.y][threadIdx.x + s];
-      }
-      __syncthreads();
+      sum += A[i * n + j] * x_shared[j];
     }
-    if (threadIdx.x == 0)
-    {
-      atomicAdd(&y[i], sdata[threadIdx.y][0]);
-    }
+    y[i] = sum;
   }
 }
 
@@ -98,8 +91,8 @@ int main(void)
     CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
 
     assert(N % 2 == 0);
-    dim3 block_size(16, 16);
-    dim3 grid_size((N / 2 + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
+    int block_size = 32;
+    int grid_size = (N + block_size - 1) / block_size;
 
     init_cuda<<<grid_size, block_size>>>(N, A, x, y);
     mul_gpu<<<grid_size, block_size>>>(N, A, x, y);
