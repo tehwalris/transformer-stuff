@@ -40,7 +40,7 @@ float rand_float_neg_1_1()
   return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
 }
 
-void init_cpu(int n, char4 *A, float *A_scale, char4 *x, float *x_scale, float *y)
+void init_cpu(int n, char4 *A, float *A_scale, char4 *x, float *x_scale, float *y, char4 *y_quantized, float *y_scale, float *z)
 {
   fill_rand_char4(n * n, A);
   for (int i = 0; i < n; i++)
@@ -52,6 +52,38 @@ void init_cpu(int n, char4 *A, float *A_scale, char4 *x, float *x_scale, float *
   for (int i = 0; i < n; i++)
   {
     y[i] = 0.0f;
+  }
+  for (int i = 0; i < n; i += 4)
+  {
+    y_quantized[i / 4].x = 0;
+    y_quantized[i / 4].y = 0;
+    y_quantized[i / 4].z = 0;
+    y_quantized[i / 4].w = 0;
+  }
+  *y_scale = 0.0f;
+  for (int i = 0; i < n; i++)
+  {
+    z[i] = 0.0f;
+  }
+}
+
+void clear_cpu(int n, float *y, char4 *y_quantized, float *y_scale, float *z)
+{
+  for (int i = 0; i < n; i++)
+  {
+    y[i] = 0.0f;
+  }
+  for (int i = 0; i < n; i += 4)
+  {
+    y_quantized[i / 4].x = 0;
+    y_quantized[i / 4].y = 0;
+    y_quantized[i / 4].z = 0;
+    y_quantized[i / 4].w = 0;
+  }
+  *y_scale = 0.0f;
+  for (int i = 0; i < n; i++)
+  {
+    z[i] = 0.0f;
   }
 }
 
@@ -100,6 +132,26 @@ void post_mul_scale_cpu(int n, float *y, float *A_scale, float x_scale)
   }
 }
 
+void quantize_q8_cpu(int n, float *input, char4 *output, float *unquantize_scale)
+{
+  float abs_max = 0.0f;
+  for (int i = 0; i < n; i++)
+  {
+    abs_max = std::max(abs_max, std::abs(input[i]));
+  }
+
+  *unquantize_scale = abs_max * (1.0f / 127.0f);
+  float quantize_scale = 1.0f / *unquantize_scale;
+
+  for (int i = 0; i < n; i += 4)
+  {
+    output[i / 4].x = int8_t(std::round(input[i + 0] * quantize_scale));
+    output[i / 4].y = int8_t(std::round(input[i + 1] * quantize_scale));
+    output[i / 4].z = int8_t(std::round(input[i + 2] * quantize_scale));
+    output[i / 4].w = int8_t(std::round(input[i + 3] * quantize_scale));
+  }
+}
+
 int main(void)
 {
   srand(0);
@@ -112,23 +164,22 @@ int main(void)
   char4 *x;
   float x_scale;
   float *y;
+  char4 *y_quantized;
+  float y_scale;
+  float *z;
   assert(N % 4 == 0);
   CUDA_CHECK(cudaMallocManaged(&A, N * N / 4 * sizeof(char4)));
   CUDA_CHECK(cudaMallocManaged(&A_scale, N * sizeof(float)));
   CUDA_CHECK(cudaMallocManaged(&x, N / 4 * sizeof(char4)));
   CUDA_CHECK(cudaMallocManaged(&y, N * sizeof(float)));
+  CUDA_CHECK(cudaMallocManaged(&y_quantized, N / 4 * sizeof(char4)));
+  CUDA_CHECK(cudaMallocManaged(&z, N * sizeof(float)));
 
-  init_cpu(N, A, A_scale, x, &x_scale, y);
-
-  mul_cpu(N, A, x, y);
-  post_mul_scale_cpu(N, y, A_scale, x_scale);
+  init_cpu(N, A, A_scale, x, &x_scale, y, y_quantized, &y_scale, z);
 
   // GPU version
   {
-    for (int i = 0; i < N; i++)
-    {
-      y[i] = 0.0f;
-    }
+    clear_cpu(N, y, y_quantized, &y_scale, z);
 
     assert(N % 4 == 0);
     dim3 block_size_mul(32, 8);
@@ -140,17 +191,24 @@ int main(void)
     mul_gpu<<<grid_size_mul, block_size_mul>>>(N, A, x, y);
     post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(N, y, A_scale, x_scale);
     CUDA_CHECK(cudaDeviceSynchronize());
+    quantize_q8_cpu(N, y, y_quantized, &y_scale); // TODO GPU
+    mul_gpu<<<grid_size_mul, block_size_mul>>>(N, A, y_quantized, z);
+    post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(N, z, A_scale, y_scale);
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     float sum_y = 0.0f;
+    float sum_z = 0.0f;
     for (int i = 0; i < N; i++)
     {
       sum_y += y[i];
+      sum_z += z[i];
     }
-    std::cout << "GPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << std::endl;
+    std::cout << "GPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << ", z[0] = " << z[0] << ", sum(z) = " << sum_z << std::endl;
 
     CUDA_CHECK(cudaMemPrefetchAsync(A, N * N / 4 * sizeof(char4), 0));
     CUDA_CHECK(cudaMemPrefetchAsync(x, N / 4 * sizeof(char4), 0));
     CUDA_CHECK(cudaMemPrefetchAsync(y, N * sizeof(float), 0));
+    // TODO
 
     printf("Starting GPU benchmark\n");
     auto start = std::chrono::high_resolution_clock::now();
@@ -158,6 +216,10 @@ int main(void)
     {
       mul_gpu<<<grid_size_mul, block_size_mul>>>(N, A, x, y);
       post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(N, y, A_scale, x_scale);
+      CUDA_CHECK(cudaDeviceSynchronize());
+      quantize_q8_cpu(N, y, y_quantized, &y_scale); // TODO GPU
+      mul_gpu<<<grid_size_mul, block_size_mul>>>(N, A, y_quantized, z);
+      post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(N, z, A_scale, y_scale);
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     auto end = std::chrono::high_resolution_clock::now();
@@ -167,24 +229,27 @@ int main(void)
 
   // CPU version
   {
-    for (int i = 0; i < N; i++)
-    {
-      y[i] = 0.0f;
-    }
+    clear_cpu(N, y, y_quantized, &y_scale, z);
 
     mul_cpu(N, A, x, y);
     post_mul_scale_cpu(N, y, A_scale, x_scale);
+    quantize_q8_cpu(N, y, y_quantized, &y_scale);
+    mul_cpu(N, A, y_quantized, z);
+    post_mul_scale_cpu(N, z, A_scale, y_scale);
 
     CUDA_CHECK(cudaMemPrefetchAsync(A, N * N / 4 * sizeof(char4), cudaCpuDeviceId));
     CUDA_CHECK(cudaMemPrefetchAsync(x, N / 4 * sizeof(char4), cudaCpuDeviceId));
     CUDA_CHECK(cudaMemPrefetchAsync(y, N * sizeof(float), cudaCpuDeviceId));
+    // TODO
 
     float sum_y = 0.0f;
+    float sum_z = 0.0f;
     for (int i = 0; i < N; i++)
     {
       sum_y += y[i];
+      sum_z += z[i];
     }
-    std::cout << "CPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << std::endl;
+    std::cout << "CPU result: y[0] = " << y[0] << ", sum(y) = " << sum_y << ", z[0] = " << z[0] << ", sum(z) = " << sum_z << std::endl;
 
     printf("Starting CPU benchmark\n");
 
