@@ -3350,6 +3350,41 @@ llama_model *llama_get_model(struct llama_context *ctx)
   return &ctx->model;
 }
 
+llama_model_loader *new_llama_model_loader(const std::string &fname_base)
+{
+  return new llama_model_loader(fname_base, false, false);
+}
+
+void delete_llama_model_loader(llama_model_loader *loader)
+{
+  delete loader;
+}
+
+llama_hparams *llama_model_loader_get_hparams(llama_model_loader *loader)
+{
+  assert(loader->file_loaders.size() > 0);
+  return &loader->file_loaders[0]->hparams;
+}
+
+const std::vector<uint32_t> &llama_model_loader_get_tensor_shape(llama_model_loader *loader, const std::string &name)
+{
+  llama_load_tensor &tensor = loader->tensors_map.tensors.at(loader->tensors_map.name_to_idx.at(name));
+  return tensor.ne;
+}
+
+ggml_type llama_model_loader_get_tensor_type(llama_model_loader *loader, const std::string &name)
+{
+  llama_load_tensor &tensor = loader->tensors_map.tensors.at(loader->tensors_map.name_to_idx.at(name));
+  return tensor.type;
+}
+
+void llama_model_loader_get_tensor_data(llama_model_loader *loader, const std::string &name, uint8_t *data)
+{
+  llama_load_tensor &tensor = loader->tensors_map.tensors.at(loader->tensors_map.name_to_idx.at(name));
+  tensor.data = data;
+  loader->load_data_for(tensor);
+}
+
 // For internal test use
 std::vector<std::pair<std::string, struct ggml_tensor *>> &llama_internal_get_tensor_map(struct llama_context *ctx)
 {

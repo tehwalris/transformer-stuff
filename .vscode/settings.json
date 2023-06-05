@@ -57,7 +57,11 @@
     "stdexcept": "cpp",
     "stop_token": "cpp",
     "thread": "cpp",
-    "typeinfo": "cpp"
+    "typeinfo": "cpp",
+    "bitset": "cpp",
+    "codecvt": "cpp",
+    "optional": "cpp",
+    "iomanip": "cpp"
   },
   "cSpell.words": ["ggml"]
 }
