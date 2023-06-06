@@ -1,5 +1,6 @@
 /a.out
 /matrix_multiplication
 /cuda_example
+/test
 
 *.o
