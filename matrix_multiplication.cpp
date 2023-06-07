@@ -16,6 +16,11 @@ const float dot_product_scale = 1.0f / std::sqrt(float(n_hidden) / float(n_heads
 
 static float table_f32_f16[1 << 16];
 
+float rand_float_neg_1_1()
+{
+  return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
+}
+
 float vector_dot_product_baseline(uint32_t n, float *va, float *vb)
 {
   float sum = 0.0;
@@ -570,6 +575,12 @@ void transformer_whole_fast(uint32_t new_i, uint32_t new_token,
     }
   }
 
+  srand(new_i);
+  for (uint32_t i = 0; i < n_hidden; i++)
+  {
+    embedding_in[i] = 15.0f * rand_float_neg_1_1();
+  }
+
   for (uint32_t i_layer = 0; i_layer < n_layers; i_layer++)
   {
     transformer_layer_fast(new_i, embedding_in,
@@ -577,6 +588,14 @@ void transformer_whole_fast(uint32_t new_i, uint32_t new_token,
                            &cache_k[i_layer * n_context * n_hidden], &cache_v[i_layer * n_context * n_hidden],
                            temp,
                            embedding_out);
+    if (i_layer == 0)
+    {
+      for (uint32_t i : {0u, 1u, n_hidden - 2, n_hidden - 1})
+      {
+        std::cout << "embedding_out[" << i << "] ="
+                  << embedding_out[i] << std::endl;
+      }
+    }
 
     last_layer_embedding_out = embedding_out;
     float *temp = embedding_in;
@@ -709,11 +728,6 @@ void transformer_whole_baseline(uint32_t new_i, uint32_t new_token,
     temp.model_norm[i] *= w.model_norm[i];
   }
   matrix_vector_multiply_quantized<n_vocab, n_hidden>(w.output_layer, temp.model_norm, out);
-}
-
-float rand_float_neg_1_1()
-{
-  return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
 }
 
 template <uint32_t n>
@@ -956,15 +970,16 @@ int main(int argc, char **argv)
     }
 
     llama_token input_token = i_context < n_input_tokens ? input_tokens[i_context] : last_token;
-    printf("%s", llama_token_to_str(lctx, input_token));
-    fflush(stdout);
+    // printf("%s", llama_token_to_str(lctx, input_token));
+    // fflush(stdout);
 
-    // transformer_whole_fast(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_fast, token_probs);
-    // llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+    transformer_whole_fast(i_context, uint32_t(input_token), weights, cache_k, cache_v, temp_fast, token_probs);
+    llama_token output_token = llama_token(std::max_element(token_probs, token_probs + n_vocab) - token_probs);
+    printf("\n");
 
-    llama_eval(lctx, &input_token, 1, i_context, 4);
-    float *logits = llama_get_logits(lctx);
-    llama_token output_token = llama_token(std::max_element(logits, logits + n_vocab) - logits);
+    // llama_eval(lctx, &input_token, 1, i_context, 4);
+    // float *logits = llama_get_logits(lctx);
+    // llama_token output_token = llama_token(std::max_element(logits, logits + n_vocab) - logits);
 
     last_token = output_token;
   }
