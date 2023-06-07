@@ -63,5 +63,5 @@
     "optional": "cpp",
     "iomanip": "cpp"
   },
-  "cSpell.words": ["ggml", "Hyperparams"]
+  "cSpell.words": ["ggml", "Hyperparams", "silu", "softmax"]
 }

@@ -280,7 +280,7 @@ public:
 
   virtual void forward(int n, float *hidden_in, float *hidden_out) override
   {
-    assert(n == params.n_hidden);
+    assert(uint32_t(n) == params.n_hidden);
     assert(state.new_i < params.n_context);
 
     // Norm before attention
