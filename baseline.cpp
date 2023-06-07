@@ -93,6 +93,8 @@ public:
     temp.model_norm = aligned_alloc_floats(n_hidden);
   }
 
+  BaselineLlamaLayer(const BaselineLlamaLayer &) = delete;
+
   virtual ~BaselineLlamaLayer()
   {
     free(weights.q);

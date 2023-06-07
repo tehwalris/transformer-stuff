@@ -8,6 +8,7 @@ class SimpleLlamaModelLoader
 {
 public:
   SimpleLlamaModelLoader(const std::string &fname_base);
+  SimpleLlamaModelLoader(const SimpleLlamaModelLoader &) = delete;
   ~SimpleLlamaModelLoader();
 
   float *get_tensor_float(const std::string &name, const std::vector<uint32_t> &shape);
