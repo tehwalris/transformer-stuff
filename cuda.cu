@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
 #include <cassert>
+#include <thrust/device_vector.h>
+#include <thrust/inner_product.h>
 #include "cuda.h"
 
 #define CUDA_CHECK(err)                                                         \
@@ -49,6 +51,18 @@ namespace cml
         y[i] *= A_scale[i] * x_scale;
       }
     }
+
+    struct ScaledMulFunctor
+    {
+      const float scale;
+
+      ScaledMulFunctor(float scale) : scale(scale) {}
+
+      __host__ __device__ float operator()(const float &x, const float &y) const
+      {
+        return scale * x * y;
+      }
+    };
 
     struct QuantizedMatrix
     {
@@ -143,6 +157,9 @@ namespace cml
 
     struct Temp
     {
+      thrust::device_vector<float> hidden_in;     // n_hidden
+      thrust::device_vector<float> hidden_out;    // n_hidden
+      thrust::device_vector<float> norm_residual; // n_hidden
     };
 
     struct State
@@ -201,9 +218,15 @@ namespace cml
         weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
         weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
 
+        temp.hidden_in.resize(params.n_hidden);
+        temp.hidden_out.resize(params.n_hidden);
+        temp.norm_residual.resize(params.n_hidden);
+
         CUDA_CHECK(cudaMallocManaged(&state.cache_k, params.n_context * params.n_hidden * sizeof(float)));
         CUDA_CHECK(cudaMallocManaged(&state.cache_v, params.n_context * params.n_hidden * sizeof(float)));
         state.new_i = 0;
+
+        CUDA_CHECK(cudaDeviceSynchronize());
       }
 
       LlamaLayer(const LlamaLayer &) = delete;
@@ -222,7 +245,27 @@ namespace cml
         assert(uint32_t(n) == params.n_hidden);
         assert(state.new_i < params.n_context);
 
+        const float eps = 1e-6f;
+
+        thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
+
+        // Norm before attention
+        float hidden_in_sq_norm = thrust::inner_product(temp.hidden_in.begin(), temp.hidden_in.end(), temp.hidden_in.begin(), 0.0f);
+        thrust::transform(temp.hidden_in.begin(), temp.hidden_in.end(),
+                          thrust::device_ptr<float>(weights.attention_norm),
+                          temp.norm_residual.begin(),
+                          ScaledMulFunctor(1.0f / std::sqrt(hidden_in_sq_norm / float(n) + eps)));
+
+        dim3 block_size_mul(32, 8);
+        dim3 grid_size_mul(1, (params.n_hidden + block_size_mul.y - 1) / block_size_mul.y);
+
+        int block_size_scale(256);
+        int grid_size_scale((params.n_hidden + block_size_scale - 1) / block_size_scale);
+
         // TODO
+
+        // TODO remove
+        thrust::copy(temp.norm_residual.begin(), temp.norm_residual.end(), hidden_out);
 
         state.new_i++;
       }

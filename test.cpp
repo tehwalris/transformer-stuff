@@ -42,7 +42,7 @@ int main(int argc, char **argv)
     std::cout << "i_context = " << i_context << std::endl;
     for (float &v : hidden_in)
     {
-      v = 15.0f * rand_float_neg_1_1();
+      v = rand_float_neg_1_1();
     }
 
     std::fill(hidden_out_baseline.begin(), hidden_out_baseline.end(), 0.0f);
