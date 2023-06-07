@@ -3,10 +3,17 @@
 #include "loading.h"
 #include "baseline.h"
 
-float rand_float_neg_1_1()
+namespace cml
 {
-  return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
-}
+
+  float rand_float_neg_1_1()
+  {
+    return (float)rand() / (float)RAND_MAX * 2.0f - 1.0f;
+  }
+
+};
+
+using namespace cml;
 
 int main(int argc, char **argv)
 {
@@ -25,7 +32,7 @@ int main(int argc, char **argv)
   std::vector<float> hidden_in(n_hidden);
   std::vector<float> hidden_out_baseline(n_hidden);
 
-  SimpleTransformerLayer *baseline_layer = create_baseline_llama_layer(&loader, 0);
+  SimpleTransformerLayer *baseline_layer = baseline::create_baseline_llama_layer(&loader, 0);
 
   for (uint32_t i_context = 0; i_context < 10; i_context++)
   {

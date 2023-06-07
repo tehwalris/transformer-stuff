@@ -1,5 +1,5 @@
 # Define the default target now so that it is always the first target
-BUILD_TARGETS = main quantize quantize-stats perplexity embedding vdot
+BUILD_TARGETS = test
 
 ifdef LLAMA_BUILD_SERVER
 	BUILD_TARGETS += server
@@ -221,11 +221,7 @@ baseline.o: baseline.cpp baseline.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -vf *.o main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h
-
-#
-# Examples
-#
+	rm -vf *.o main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test
 
 matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
