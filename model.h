@@ -1,9 +1,14 @@
 #pragma once
 
-class SimpleTransformerLayer
+namespace cml
 {
-public:
-    virtual ~SimpleTransformerLayer() {}
-    virtual void forward(int n, float *hidden_in, float *hidden_out) = 0;
-    virtual void reset() = 0;
+
+    class SimpleTransformerLayer
+    {
+    public:
+        virtual ~SimpleTransformerLayer() {}
+        virtual void forward(int n, float *hidden_in, float *hidden_out) = 0;
+        virtual void reset() = 0;
+    };
+
 };

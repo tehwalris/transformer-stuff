@@ -61,7 +61,8 @@
     "bitset": "cpp",
     "codecvt": "cpp",
     "optional": "cpp",
-    "iomanip": "cpp"
+    "iomanip": "cpp",
+    "__nullptr": "cpp"
   },
   "cSpell.words": ["ggml", "Hyperparams", "silu", "softmax"]
 }

@@ -193,10 +193,10 @@ namespace cml
       uint32_t new_i;
     };
 
-    class BaselineLlamaLayer : public SimpleTransformerLayer
+    class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      BaselineLlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
       {
         llama_hparams *hparams = loader->get_hparams();
         params.n_hidden = hparams->n_embd;
@@ -251,9 +251,9 @@ namespace cml
         state.new_i = 0;
       }
 
-      BaselineLlamaLayer(const BaselineLlamaLayer &) = delete;
+      LlamaLayer(const LlamaLayer &) = delete;
 
-      virtual ~BaselineLlamaLayer()
+      virtual ~LlamaLayer()
       {
         free(weights.q);
         free(weights.k);
@@ -356,9 +356,9 @@ namespace cml
       State state;
     };
 
-    SimpleTransformerLayer *create_baseline_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+    SimpleTransformerLayer *create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
     {
-      return new BaselineLlamaLayer(loader, layer_index);
+      return new LlamaLayer(loader, layer_index);
     }
 
   };

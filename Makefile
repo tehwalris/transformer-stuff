@@ -220,6 +220,9 @@ loading.o: loading.cpp loading.h
 baseline.o: baseline.cpp baseline.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+cuda.o: cuda.cu cuda.h
+	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic -c $< -o $@
+
 clean:
 	rm -vf *.o main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test
 
@@ -229,5 +232,5 @@ matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 cuda_example: cuda_example.cu
 	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 
-test: test.cpp baseline.o loading.o ggml.o llama.o $(OBJS)
+test: test.cpp baseline.o cuda.o loading.o ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)

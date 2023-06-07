@@ -5,7 +5,7 @@
 
 namespace cml
 {
-  namespace baseline
+  namespace cuda
   {
 
     SimpleTransformerLayer *create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index);

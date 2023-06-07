@@ -3,9 +3,11 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "/nix/store/04dgbzil2111nnwp74ckvnj1r7j36c3c-cudatoolkit-11.7.0/include/"
             ],
             "defines": [
+                "__CUDACC__",
                 "__CUDA_ARCH__=610"
             ],
             "compilerPath": "/nix/store/7wkshj58fcsl1f3zyi67qsxgl1p8nki1-gcc-wrapper-12.2.0/bin/g++",

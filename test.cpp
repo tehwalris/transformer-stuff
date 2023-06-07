@@ -32,7 +32,7 @@ int main(int argc, char **argv)
   std::vector<float> hidden_in(n_hidden);
   std::vector<float> hidden_out_baseline(n_hidden);
 
-  SimpleTransformerLayer *baseline_layer = baseline::create_baseline_llama_layer(&loader, 0);
+  SimpleTransformerLayer *baseline_layer = baseline::create_llama_layer(&loader, 0);
 
   for (uint32_t i_context = 0; i_context < 10; i_context++)
   {
