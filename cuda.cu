@@ -54,8 +54,78 @@ namespace cml
     {
       uint32_t n;
       uint32_t m;
-      char4 *data;
-      float *scale;
+      char4 *data = nullptr;
+      float *scale = nullptr;
+
+      QuantizedMatrix() = default;
+
+      QuantizedMatrix(uint32_t n, uint32_t m) : n(n), m(m)
+      {
+        CUDA_CHECK(cudaMallocManaged(&data, n * (m / 4) * sizeof(char4)));
+        CUDA_CHECK(cudaMallocManaged(&scale, n * sizeof(float)));
+      }
+
+      QuantizedMatrix(const QuantizedMatrix &) = delete;
+
+      QuantizedMatrix(QuantizedMatrix &&other) : n(other.n), m(other.m), data(other.data), scale(other.scale)
+      {
+        other.data = nullptr;
+        other.scale = nullptr;
+      }
+
+      ~QuantizedMatrix()
+      {
+        if (data != nullptr)
+        {
+          CUDA_CHECK(cudaFree(data));
+        }
+        if (scale != nullptr)
+        {
+          CUDA_CHECK(cudaFree(scale));
+        }
+      }
+
+      QuantizedMatrix &operator=(QuantizedMatrix &&other) noexcept
+      {
+        if (this != &other)
+        {
+          n = other.n;
+          m = other.m;
+          data = other.data;
+          scale = other.scale;
+          other.data = nullptr;
+          other.scale = nullptr;
+        }
+        return *this;
+      }
+
+      void fill_from_unquantized(const float *unquantized)
+      {
+        for (uint32_t i = 0; i < n; i++)
+        {
+          float max_abs = 0;
+          for (uint32_t j = 0; j < m; j++)
+          {
+            float abs = fabs(unquantized[i * m + j]);
+            if (abs > max_abs)
+            {
+              max_abs = abs;
+            }
+          }
+
+          float scale = max_abs / 127.0f;
+          this->scale[i] = scale;
+          float inv_scale = 1.0f / scale;
+
+          for (uint32_t j = 0; j < m; j += 4)
+          {
+            this->data[(i * m + j) / 4].x = (int8_t)(unquantized[i * m + j + 0] * inv_scale);
+            this->data[(i * m + j) / 4].y = (int8_t)(unquantized[i * m + j + 1] * inv_scale);
+            this->data[(i * m + j) / 4].z = (int8_t)(unquantized[i * m + j + 2] * inv_scale);
+            this->data[(i * m + j) / 4].w = (int8_t)(unquantized[i * m + j + 3] * inv_scale);
+          }
+        }
+      }
     };
 
     struct Weights
@@ -95,34 +165,44 @@ namespace cml
 
         assert(layer_index < hparams->n_layer);
 
-        auto get_weights = [&](const std::string &short_name, const std::vector<uint32_t> &shape)
+        auto get_quantized_matrix = [&](const std::string &short_name, uint32_t n, uint32_t m)
         {
           std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
 
-          uint32_t num_elements = 1;
-          for (uint32_t v : shape)
-          {
-            num_elements *= v;
-          }
+          assert(m % 4 == 0);
 
-          float *data = aligned_alloc_floats(num_elements);
-          float *data_temp = loader->get_tensor_float(name, shape);
-          memcpy(data, data_temp, num_elements * sizeof(float));
+          QuantizedMatrix q(n, m);
+
+          q.fill_from_unquantized(loader->get_tensor_float(name, {n, m}));
+
+          return q;
+        };
+
+        auto get_vector = [&](const std::string &short_name, uint32_t n)
+        {
+          std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
+
+          float *data;
+          CUDA_CHECK(cudaMallocManaged(&data, n * sizeof(float)));
+
+          float *data_temp = loader->get_tensor_float(name, {n});
+          memcpy(data, data_temp, n * sizeof(float));
+
           return data;
         };
 
-        weights.q = get_weights("attention.wq.weight", {params.n_hidden, params.n_hidden});
-        weights.k = get_weights("attention.wk.weight", {params.n_hidden, params.n_hidden});
-        weights.v = get_weights("attention.wv.weight", {params.n_hidden, params.n_hidden});
-        weights.o = get_weights("attention.wo.weight", {params.n_hidden, params.n_hidden});
-        weights.l1 = get_weights("feed_forward.w1.weight", {params.n_ff, params.n_hidden});
-        weights.l2 = get_weights("feed_forward.w2.weight", {params.n_hidden, params.n_ff});
-        weights.l3 = get_weights("feed_forward.w3.weight", {params.n_ff, params.n_hidden});
-        weights.attention_norm = get_weights("attention_norm.weight", {params.n_hidden});
-        weights.ff_norm = get_weights("ffn_norm.weight", {params.n_hidden});
+        weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
+        weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
+        weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
+        weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
+        weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
+        weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
+        weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
+        weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
+        weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
 
-        state.cache_k = aligned_alloc_floats(params.n_context * params.n_hidden);
-        state.cache_v = aligned_alloc_floats(params.n_context * params.n_hidden);
+        CUDA_CHECK(cudaMallocManaged(&state.cache_k, params.n_context * params.n_hidden * sizeof(float)));
+        CUDA_CHECK(cudaMallocManaged(&state.cache_v, params.n_context * params.n_hidden * sizeof(float)));
         state.new_i = 0;
       }
 
@@ -130,13 +210,6 @@ namespace cml
 
       virtual ~LlamaLayer()
       {
-        free(weights.q);
-        free(weights.k);
-        free(weights.v);
-        free(weights.o);
-        free(weights.l1);
-        free(weights.l2);
-        free(weights.l3);
         free(weights.attention_norm);
         free(weights.ff_norm);
 
