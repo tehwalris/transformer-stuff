@@ -21,7 +21,6 @@ namespace cml
   namespace cuda
   {
     const uint32_t n_ff_multiple = 256;
-    const uint32_t cache_line_bytes = 64;
 
     struct Hyperparams
     {
@@ -52,6 +51,17 @@ namespace cml
       }
     }
 
+    __global__ void quantize_gpu(int n, float *input, char4 *output, float quantize_scale)
+    {
+      for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n / 4; i += blockDim.x * gridDim.x)
+      {
+        output[i].x = (int8_t)(rint(input[i * 4 + 0] * quantize_scale));
+        output[i].y = (int8_t)(rint(input[i * 4 + 1] * quantize_scale));
+        output[i].z = (int8_t)(rint(input[i * 4 + 2] * quantize_scale));
+        output[i].w = (int8_t)(rint(input[i * 4 + 3] * quantize_scale));
+      }
+    }
+
     struct ScaledMulFunctor
     {
       const float scale;
@@ -61,6 +71,15 @@ namespace cml
       __host__ __device__ float operator()(const float &x, const float &y) const
       {
         return scale * x * y;
+      }
+    };
+
+    template <typename T>
+    struct AbsoluteValueFunctor
+    {
+      __host__ __device__ T operator()(const T &x) const
+      {
+        return fabsf(x);
       }
     };
 
@@ -157,9 +176,13 @@ namespace cml
 
     struct Temp
     {
-      thrust::device_vector<float> hidden_in;     // n_hidden
-      thrust::device_vector<float> hidden_out;    // n_hidden
-      thrust::device_vector<float> norm_residual; // n_hidden
+      thrust::device_vector<float> hidden_in;               // n_hidden
+      thrust::device_vector<float> hidden_out;              // n_hidden
+      thrust::device_vector<float> norm_residual;           // n_hidden
+      thrust::device_vector<char4> norm_residual_quantized; // n_hidden
+      thrust::device_vector<float> q;                       // n_hidden
+      thrust::device_vector<float> k;                       // n_hidden
+      thrust::device_vector<float> v;                       // n_hidden
     };
 
     struct State
@@ -181,6 +204,7 @@ namespace cml
         params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
 
         assert(layer_index < hparams->n_layer);
+        assert(params.n_hidden % 4 == 0);
 
         auto get_quantized_matrix = [&](const std::string &short_name, uint32_t n, uint32_t m)
         {
@@ -221,6 +245,10 @@ namespace cml
         temp.hidden_in.resize(params.n_hidden);
         temp.hidden_out.resize(params.n_hidden);
         temp.norm_residual.resize(params.n_hidden);
+        temp.norm_residual_quantized.resize(params.n_hidden / 4);
+        temp.q.resize(params.n_hidden);
+        temp.k.resize(params.n_hidden);
+        temp.v.resize(params.n_hidden);
 
         CUDA_CHECK(cudaMallocManaged(&state.cache_k, params.n_context * params.n_hidden * sizeof(float)));
         CUDA_CHECK(cudaMallocManaged(&state.cache_v, params.n_context * params.n_hidden * sizeof(float)));
@@ -247,6 +275,15 @@ namespace cml
 
         const float eps = 1e-6f;
 
+        const dim3 block_size_mul(32, 8);
+        const dim3 grid_size_mul(1, (params.n_hidden + block_size_mul.y - 1) / block_size_mul.y);
+
+        const int block_size_scale(256);
+        const int grid_size_scale((params.n_hidden + block_size_scale - 1) / block_size_scale);
+
+        const int block_size_quantize(256);
+        const int grid_size_quantize((params.n_hidden + block_size_quantize - 1) / block_size_scale);
+
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
 
         // Norm before attention
@@ -256,16 +293,27 @@ namespace cml
                           temp.norm_residual.begin(),
                           ScaledMulFunctor(1.0f / std::sqrt(hidden_in_sq_norm / float(n) + eps)));
 
-        dim3 block_size_mul(32, 8);
-        dim3 grid_size_mul(1, (params.n_hidden + block_size_mul.y - 1) / block_size_mul.y);
+        float abs_max = thrust::transform_reduce(temp.norm_residual.begin(), temp.norm_residual.end(),
+                                                 AbsoluteValueFunctor<float>(),
+                                                 0.0f,
+                                                 thrust::maximum<float>());
+        float unquantize_scale = abs_max / 127.0f;
+        float quantize_scale = 1.0f / unquantize_scale;
+        quantize_gpu<<<grid_size_quantize, block_size_quantize>>>(params.n_hidden, temp.norm_residual.data().get(), temp.norm_residual_quantized.data().get(), quantize_scale);
 
-        int block_size_scale(256);
-        int grid_size_scale((params.n_hidden + block_size_scale - 1) / block_size_scale);
+        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.q.data, temp.norm_residual_quantized.data().get(), temp.q.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.q.data().get(), weights.q.scale, unquantize_scale);
+
+        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.k.data, temp.norm_residual_quantized.data().get(), temp.k.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.k.data().get(), weights.k.scale, unquantize_scale);
+
+        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.v.data, temp.norm_residual_quantized.data().get(), temp.v.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.v.data().get(), weights.v.scale, unquantize_scale);
 
         // TODO
 
         // TODO remove
-        thrust::copy(temp.norm_residual.begin(), temp.norm_residual.end(), hidden_out);
+        thrust::copy(temp.q.begin(), temp.q.end(), hidden_out);
 
         state.new_i++;
       }
