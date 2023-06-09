@@ -62,6 +62,34 @@ namespace cml
       }
     }
 
+    __global__ void rope_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t new_i, float *vec)
+    {
+      for (uint32_t i_head = blockIdx.y * blockDim.y + threadIdx.y; i_head < n_heads; i_head += blockDim.y * gridDim.y)
+      {
+        for (uint32_t i_in_head = 2 * blockIdx.x * blockDim.x + threadIdx.x; i_in_head < n_hidden / n_heads; i_in_head += 2 * blockDim.x * gridDim.x)
+        {
+          float theta = float(new_i) * powf(10000.0f, -float(i_in_head) / (float(n_hidden) / float(n_heads)));
+          float cos_theta = cosf(theta);
+          float sin_theta = sinf(theta);
+
+          uint32_t i_0 = i_head * (n_hidden / n_heads) + i_in_head;
+          uint32_t i_1 = i_0 + 1;
+
+          float old_0 = vec[i_0];
+          float old_1 = vec[i_1];
+
+          vec[i_0] = old_0 * cos_theta - old_1 * sin_theta;
+          vec[i_1] = old_0 * sin_theta + old_1 * cos_theta;
+        }
+      }
+    }
+
+    template <typename T>
+    T ceil_div(T a, T b)
+    {
+      return (a + b - 1) / b;
+    }
+
     struct ScaledMulFunctor
     {
       const float scale;
@@ -205,6 +233,8 @@ namespace cml
 
         assert(layer_index < hparams->n_layer);
         assert(params.n_hidden % 4 == 0);
+        assert(params.n_hidden % params.n_heads == 0);
+        assert((params.n_hidden / params.n_heads) % 2 == 0);
 
         auto get_quantized_matrix = [&](const std::string &short_name, uint32_t n, uint32_t m)
         {
@@ -276,13 +306,16 @@ namespace cml
         const float eps = 1e-6f;
 
         const dim3 block_size_mul(32, 8);
-        const dim3 grid_size_mul(1, (params.n_hidden + block_size_mul.y - 1) / block_size_mul.y);
+        const dim3 grid_size_mul(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul.y));
 
         const int block_size_scale(256);
-        const int grid_size_scale((params.n_hidden + block_size_scale - 1) / block_size_scale);
+        const int grid_size_scale(ceil_div<uint32_t>(params.n_hidden, block_size_scale));
 
         const int block_size_quantize(256);
-        const int grid_size_quantize((params.n_hidden + block_size_quantize - 1) / block_size_scale);
+        const int grid_size_quantize(ceil_div<uint32_t>(params.n_hidden, block_size_quantize));
+
+        const dim3 block_size_rope(64, 1);
+        const dim3 grid_size_rope(ceil_div<uint32_t>(params.n_hidden / params.n_heads / 2, block_size_rope.x), params.n_heads);
 
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
 
@@ -309,6 +342,9 @@ namespace cml
 
         mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.v.data, temp.norm_residual_quantized.data().get(), temp.v.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.v.data().get(), weights.v.scale, unquantize_scale);
+
+        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, state.new_i, temp.q.data().get());
+        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, state.new_i, temp.k.data().get());
 
         // TODO
 
