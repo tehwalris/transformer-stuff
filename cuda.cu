@@ -66,7 +66,7 @@ namespace cml
     {
       for (uint32_t i_head = blockIdx.y * blockDim.y + threadIdx.y; i_head < n_heads; i_head += blockDim.y * gridDim.y)
       {
-        for (uint32_t i_in_head = 2 * blockIdx.x * blockDim.x + threadIdx.x; i_in_head < n_hidden / n_heads; i_in_head += 2 * blockDim.x * gridDim.x)
+        for (uint32_t i_in_head = 2 * (blockIdx.x * blockDim.x + threadIdx.x); i_in_head < n_hidden / n_heads; i_in_head += 2 * blockDim.x * gridDim.x)
         {
           float theta = float(new_i) * powf(10000.0f, -float(i_in_head) / (float(n_hidden) / float(n_heads)));
           float cos_theta = cosf(theta);
