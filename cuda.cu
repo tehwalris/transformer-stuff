@@ -474,10 +474,13 @@ namespace cml
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.o.data().get(), weights.o.scale, projection_unquantize_scale);
         thrust::transform(temp.o.begin(), temp.o.end(), temp.hidden_in.begin(), temp.o.begin(), thrust::plus<float>());
 
+        // Norm before feed forward
+        rms_norm_gpu_full(temp.o, temp.norm_residual, thrust::device_ptr<float>(weights.ff_norm));
+
         // TODO
 
         // TODO remove
-        thrust::copy(temp.o.begin(), temp.o.end(), hidden_out);
+        thrust::copy(temp.norm_residual.begin(), temp.norm_residual.end(), hidden_out);
 
         state.new_i++;
       }
