@@ -30,14 +30,14 @@ namespace cml
       uint32_t n_ff;
     };
 
-    __global__ void mul_gpu(int n, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
+    __global__ void mul_gpu(int n_rows, int n_cols, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
     {
-      for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n; i_row += blockDim.y * gridDim.y)
+      for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
       {
         int sum = 0;
-        for (int i_col = threadIdx.x; i_col < n / 4; i_col += blockDim.x)
+        for (int i_col = threadIdx.x; i_col < n_cols / 4; i_col += blockDim.x)
         {
-          sum = __dp4a(A[(i_row * n) / 4 + i_col], x[i_col], sum);
+          sum = __dp4a(A[(i_row * n_cols) / 4 + i_col], x[i_col], sum);
         }
         atomicAdd(&y[i_row], float(sum));
       }
@@ -171,6 +171,15 @@ namespace cml
       __host__ __device__ T operator()(const T &x) const
       {
         return fabsf(x);
+      }
+    };
+
+    template <typename T>
+    struct SiluMultiplyFunctor
+    {
+      __host__ __device__ T operator()(const T &x, const T &y) const
+      {
+        return (x * y) / (1.0f + expf(-y));
       }
     };
 
@@ -310,6 +319,10 @@ namespace cml
       thrust::device_vector<float> attention_sum;              // n_context
       thrust::device_vector<float> attention_result;           // n_hidden
       thrust::device_vector<char4> attention_result_quantized; // n_hidden
+      thrust::device_vector<float> l1;                         // n_ff
+      thrust::device_vector<float> l2;                         // n_hidden
+      thrust::device_vector<float> l3;                         // n_ff
+      thrust::device_vector<char4> l3_quantized;               // n_ff
     };
 
     struct State
@@ -332,6 +345,7 @@ namespace cml
 
         assert(layer_index < hparams->n_layer);
         assert(params.n_hidden % 4 == 0);
+        assert(params.n_ff % 4 == 0);
         assert(params.n_hidden % params.n_heads == 0);
         assert((params.n_hidden / params.n_heads) % 2 == 0);
 
@@ -383,6 +397,10 @@ namespace cml
         temp.attention_sum.resize(params.n_context);
         temp.attention_result.resize(params.n_hidden);
         temp.attention_result_quantized.resize(params.n_hidden / 4);
+        temp.l1.resize(params.n_ff);
+        temp.l2.resize(params.n_hidden);
+        temp.l3.resize(params.n_ff);
+        temp.l3_quantized.resize(params.n_ff / 4);
 
         state.cache_k.resize(params.n_context * params.n_hidden);
         state.cache_v.resize(params.n_context * params.n_hidden);
@@ -404,8 +422,11 @@ namespace cml
         assert(uint32_t(n) == params.n_hidden);
         assert(state.new_i < params.n_context);
 
-        const dim3 block_size_mul(32, 8);
-        const dim3 grid_size_mul(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul.y));
+        const dim3 block_size_mul_n_hidden(32, 8);
+        const dim3 grid_size_mul_n_hidden(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul_n_hidden.y));
+
+        const dim3 block_size_mul_n_ff(32, 8);
+        const dim3 grid_size_mul_n_ff(1, ceil_div<uint32_t>(params.n_ff, block_size_mul_n_ff.y));
 
         const int block_size_scale(256);
         const int grid_size_scale(ceil_div<uint32_t>(params.n_hidden, block_size_scale));
@@ -429,25 +450,30 @@ namespace cml
         const dim3 grid_size_attention_sum(ceil_div<uint32_t>(params.n_hidden / params.n_heads, block_size_attention_sum.x),
                                            ceil_div<uint32_t>(params.n_heads, block_size_attention_sum.y));
 
+        // Copy to GPU
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
 
+        // Zero accumulators
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
         thrust::fill(temp.k.begin(), temp.k.end(), 0.0f);
         thrust::fill(temp.v.begin(), temp.v.end(), 0.0f);
         thrust::fill(temp.o.begin(), temp.o.end(), 0.0f);
         thrust::fill(temp.attention.begin(), temp.attention.end(), 0.0f);
         thrust::fill(temp.attention_sum.begin(), temp.attention_sum.end(), 0.0f);
+        thrust::fill(temp.l1.begin(), temp.l1.end(), 0.0f);
+        thrust::fill(temp.l2.begin(), temp.l2.end(), 0.0f);
+        thrust::fill(temp.l3.begin(), temp.l3.end(), 0.0f);
 
         // Norm before attention
         rms_norm_gpu_full(temp.hidden_in, temp.norm_residual, thrust::device_ptr<float>(weights.attention_norm));
 
         // Compute Q, K, V
         float qkv_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
-        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.q.data, temp.norm_residual_quantized.data().get(), temp.q.data().get());
+        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.q.data, temp.norm_residual_quantized.data().get(), temp.q.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.q.data().get(), weights.q.scale, qkv_unquantize_scale);
-        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.k.data, temp.norm_residual_quantized.data().get(), temp.k.data().get());
+        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.k.data, temp.norm_residual_quantized.data().get(), temp.k.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.k.data().get(), weights.k.scale, qkv_unquantize_scale);
-        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.v.data, temp.norm_residual_quantized.data().get(), temp.v.data().get());
+        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.v.data, temp.norm_residual_quantized.data().get(), temp.v.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.v.data().get(), weights.v.scale, qkv_unquantize_scale);
 
         // Apply RoPE
@@ -470,17 +496,33 @@ namespace cml
 
         // Projection and residual
         float projection_unquantize_scale = quantize_gpu_full(temp.attention_result, temp.attention_result_quantized);
-        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.o.data, temp.attention_result_quantized.data().get(), temp.o.data().get());
+        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.o.data, temp.attention_result_quantized.data().get(), temp.o.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.o.data().get(), weights.o.scale, projection_unquantize_scale);
         thrust::transform(temp.o.begin(), temp.o.end(), temp.hidden_in.begin(), temp.o.begin(), thrust::plus<float>());
 
         // Norm before feed forward
         rms_norm_gpu_full(temp.o, temp.norm_residual, thrust::device_ptr<float>(weights.ff_norm));
 
-        // TODO
+        // Feed forward (up)
+        float ff_up_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
+        mul_gpu<<<grid_size_mul_n_ff, block_size_mul_n_ff>>>(params.n_ff, params.n_hidden, weights.l1.data, temp.norm_residual_quantized.data().get(), temp.l1.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_ff, temp.l1.data().get(), weights.l1.scale, ff_up_unquantize_scale);
+        mul_gpu<<<grid_size_mul_n_ff, block_size_mul_n_ff>>>(params.n_ff, params.n_hidden, weights.l3.data, temp.norm_residual_quantized.data().get(), temp.l3.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_ff, temp.l3.data().get(), weights.l3.scale, ff_up_unquantize_scale);
 
-        // TODO remove
-        thrust::copy(temp.norm_residual.begin(), temp.norm_residual.end(), hidden_out);
+        // Feed forward (silu)
+        thrust::transform(temp.l3.begin(), temp.l3.end(), temp.l1.begin(), temp.l3.begin(), SiluMultiplyFunctor<float>());
+
+        // Feed forward (down)
+        float ff_down_unquantize_scale = quantize_gpu_full(temp.l3, temp.l3_quantized);
+        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_ff, weights.l2.data, temp.l3_quantized.data().get(), temp.l2.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.l2.data().get(), weights.l2.scale, ff_down_unquantize_scale);
+
+        // Residual
+        thrust::transform(temp.l2.begin(), temp.l2.end(), temp.o.begin(), temp.l2.begin(), thrust::plus<float>());
+
+        // Copy from GPU
+        thrust::copy(temp.l2.begin(), temp.l2.end(), hidden_out);
 
         state.new_i++;
       }

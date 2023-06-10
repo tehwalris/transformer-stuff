@@ -87,7 +87,8 @@
     "climits": "cpp",
     "ios": "cpp",
     "cstdbool": "cpp",
-    "version": "cpp"
+    "version": "cpp",
+    "__split_buffer": "cpp"
   },
   "cSpell.words": ["ggml", "Hyperparams", "silu", "softmax"]
 }
