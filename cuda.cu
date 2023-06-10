@@ -398,6 +398,12 @@ namespace cml
 
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
 
+        thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
+        thrust::fill(temp.k.begin(), temp.k.end(), 0.0f);
+        thrust::fill(temp.v.begin(), temp.v.end(), 0.0f);
+        thrust::fill(temp.attention.begin(), temp.attention.end(), 0.0f);
+        thrust::fill(temp.attention_sum.begin(), temp.attention_sum.end(), 0.0f);
+
         // Norm before attention
         float hidden_in_sq_norm = thrust::inner_product(temp.hidden_in.begin(), temp.hidden_in.end(), temp.hidden_in.begin(), 0.0f);
         thrust::transform(temp.hidden_in.begin(), temp.hidden_in.end(),
@@ -433,7 +439,7 @@ namespace cml
         attention_dot_gpu<<<grid_size_attention_dot, block_size_attention_dot>>>(params.n_hidden, params.n_heads, state.new_i, state.cache_k.data().get(), temp.q.data().get(), temp.attention.data().get());
 
         // Softmax (except divide)
-        float dot_product_scale = 1.0f / std::sqrt(float(params.n_hidden) / float(params.n_heads));
+        float dot_product_scale = 1.0f / std::sqrt(float(params.n_hidden / params.n_heads));
         attention_softmax_gpu<<<grid_size_attention_softmax, block_size_attention_softmax>>>(state.new_i, temp.attention.data().get(), dot_product_scale, temp.attention_sum.data().get());
 
         // Sum V weighted by softmax attention
