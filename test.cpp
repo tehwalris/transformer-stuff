@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <chrono>
 #include "loading.h"
 #include "baseline.h"
 #include "cuda.h"
@@ -15,6 +16,24 @@ namespace cml
 };
 
 using namespace cml;
+
+void benchmark_layer(SimpleTransformerLayer *layer, const std::string &layer_name, uint32_t n_hidden, std::vector<float> &hidden_in, std::vector<float> &hidden_out_baseline, uint32_t benchmark_iterations)
+{
+  std::cout << "Benchmarking " << layer_name << std::endl;
+  layer->reset();
+
+  std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+  for (uint32_t i = 0; i < benchmark_iterations; i++)
+  {
+    layer->forward(n_hidden, hidden_in.data(), hidden_out_baseline.data());
+  }
+
+  std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<double> elapsed = end - start;
+  std::cout << "Layer took " << elapsed.count() / benchmark_iterations * 1e3 << " ms per iteration" << std::endl;
+}
 
 int main(int argc, char **argv)
 {
@@ -73,4 +92,8 @@ int main(int argc, char **argv)
 
     std::cout << std::endl;
   }
+
+  uint32_t benchmark_iterations = 128;
+  benchmark_layer(cuda_layer, "cuda_layer", n_hidden, hidden_in, hidden_out_cuda, benchmark_iterations);
+  benchmark_layer(baseline_layer, "baseline_layer", n_hidden, hidden_in, hidden_out_baseline, benchmark_iterations);
 }
