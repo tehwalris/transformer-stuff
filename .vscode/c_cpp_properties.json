@@ -8,12 +8,15 @@
             ],
             "defines": [
                 "__CUDACC__",
-                "__CUDA_ARCH__=610"
+                "__CUDA_ARCH__=610",
+                "__HIP_PLATFORM_AMD__",
+                "__clang__",
+                "__HIP__"
             ],
-            "compilerPath": "/nix/store/7wkshj58fcsl1f3zyi67qsxgl1p8nki1-gcc-wrapper-12.2.0/bin/g++",
+            "compilerPath": "/nix/store/1i2jj3n47dhzpi6z63jv7sbabnc4wk0v-rocm-llvm-clang-wrapper-5.4.4/bin/clang",
             "cStandard": "gnu17",
             "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-gcc-x64",
+            "intelliSenseMode": "linux-clang-x64",
             "compilerArgs": [
                 "-O3",
                 "-march=native",

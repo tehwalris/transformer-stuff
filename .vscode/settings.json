@@ -88,7 +88,9 @@
     "ios": "cpp",
     "cstdbool": "cpp",
     "version": "cpp",
-    "__split_buffer": "cpp"
+    "__split_buffer": "cpp",
+    "loading.h": "c",
+    "library_types.h": "c"
   },
   "cSpell.words": ["ggml", "Hyperparams", "silu", "softmax"]
 }

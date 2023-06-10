@@ -4,6 +4,7 @@
 #include "loading.h"
 #include "baseline.h"
 #include "cuda.h"
+#include "hip.h"
 
 namespace cml
 {
@@ -52,9 +53,11 @@ int main(int argc, char **argv)
   std::vector<float> hidden_in(n_hidden);
   std::vector<float> hidden_out_baseline(n_hidden);
   std::vector<float> hidden_out_cuda(n_hidden);
+  std::vector<float> hidden_out_hip(n_hidden);
 
   SimpleTransformerLayer *baseline_layer = baseline::create_llama_layer(&loader, 0);
   SimpleTransformerLayer *cuda_layer = cuda::create_llama_layer(&loader, 0);
+  SimpleTransformerLayer *hip_layer = hip::create_llama_layer(&loader, 0);
 
   for (uint32_t i_context = 0; i_context < 10; i_context++)
   {
@@ -66,14 +69,17 @@ int main(int argc, char **argv)
 
     std::fill(hidden_out_baseline.begin(), hidden_out_baseline.end(), 0.0f);
     std::fill(hidden_out_cuda.begin(), hidden_out_cuda.end(), 0.0f);
+    std::fill(hidden_out_hip.begin(), hidden_out_hip.end(), 0.0f);
 
     baseline_layer->forward(n_hidden, hidden_in.data(), hidden_out_baseline.data());
     cuda_layer->forward(n_hidden, hidden_in.data(), hidden_out_cuda.data());
+    hip_layer->forward(n_hidden, hidden_in.data(), hidden_out_hip.data());
 
     for (uint32_t i_hidden : {0u, 1u, n_hidden - 2, n_hidden - 1})
     {
       std::cout << "hidden_out_baseline[" << i_hidden << "] = " << hidden_out_baseline[i_hidden] << std::endl;
       std::cout << "hidden_out_cuda[" << i_hidden << "] = " << hidden_out_cuda[i_hidden] << std::endl;
+      std::cout << "hidden_out_hip[" << i_hidden << "] = " << hidden_out_hip[i_hidden] << std::endl;
     }
 
     float hidden_out_sum_baseline = 0.0f;
@@ -90,10 +96,18 @@ int main(int argc, char **argv)
     }
     std::cout << "hidden_out_sum_cuda = " << hidden_out_sum_cuda << std::endl;
 
+    float hidden_out_sum_hip = 0.0f;
+    for (float v : hidden_out_hip)
+    {
+      hidden_out_sum_hip += v;
+    }
+    std::cout << "hidden_out_sum_hip = " << hidden_out_sum_hip << std::endl;
+
     std::cout << std::endl;
   }
 
   uint32_t benchmark_iterations = 128;
+  benchmark_layer(hip_layer, "hip_layer", n_hidden, hidden_in, hidden_out_hip, benchmark_iterations);
   benchmark_layer(cuda_layer, "cuda_layer", n_hidden, hidden_in, hidden_out_cuda, benchmark_iterations);
   benchmark_layer(baseline_layer, "baseline_layer", n_hidden, hidden_in, hidden_out_baseline, benchmark_iterations);
 }

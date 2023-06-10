@@ -5,5 +5,11 @@ pkgs.mkShell {
     cudatoolkit
     gdb
     cudaPackages.nsight_compute
+    hip
+    rocthrust
+    rocprim
   ];
+  shellHook = ''
+    export ROCM_INCLUDES="-isystem ${pkgs.rocthrust}/include"
+  '';
 }
