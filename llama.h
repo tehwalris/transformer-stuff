@@ -380,15 +380,17 @@ extern "C"
   struct llama_model_loader;
   struct llama_load_tensor;
 
-  LLAMA_API llama_model_loader *new_llama_model_loader(const std::string &fname_base);
-  LLAMA_API void delete_llama_model_loader(llama_model_loader *loader);
-  LLAMA_API llama_hparams *llama_model_loader_get_hparams(llama_model_loader *loader);
-  LLAMA_API const std::vector<uint32_t> &llama_model_loader_get_tensor_shape(llama_model_loader *loader, const std::string &name);
-  LLAMA_API ggml_type llama_model_loader_get_tensor_type(llama_model_loader *loader, const std::string &name);
-  LLAMA_API void llama_model_loader_get_tensor_data(llama_model_loader *loader, const std::string &name, uint8_t *data);
-
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+llama_model_loader *new_llama_model_loader(const std::string &fname_base);
+void delete_llama_model_loader(llama_model_loader *loader);
+llama_hparams *llama_model_loader_get_hparams(llama_model_loader *loader);
+const std::vector<uint32_t> &llama_model_loader_get_tensor_shape(llama_model_loader *loader, const std::string &name);
+ggml_type llama_model_loader_get_tensor_type(llama_model_loader *loader, const std::string &name);
+void llama_model_loader_get_tensor_data(llama_model_loader *loader, const std::string &name, uint8_t *data);
 #endif
 
 // Internal API to be implemented by llama.cpp and used by tests/benchmarks only
