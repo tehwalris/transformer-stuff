@@ -192,6 +192,19 @@ namespace cml
       return unquantize_scale;
     }
 
+    void rms_norm_gpu_full(thrust::device_vector<float> &in, thrust::device_vector<float> &out, thrust::device_ptr<float> weights)
+    {
+      assert(in.size() == out.size());
+
+      const float eps = 1e-6f;
+
+      float sq_norm = thrust::inner_product(in.begin(), in.end(), in.begin(), 0.0f);
+      thrust::transform(in.begin(), in.end(),
+                        weights,
+                        out.begin(),
+                        ScaledMulFunctor(1.0f / std::sqrt(sq_norm / float(in.size()) + eps)));
+    }
+
     struct QuantizedMatrix
     {
       uint32_t n;
@@ -391,8 +404,6 @@ namespace cml
         assert(uint32_t(n) == params.n_hidden);
         assert(state.new_i < params.n_context);
 
-        const float eps = 1e-6f;
-
         const dim3 block_size_mul(32, 8);
         const dim3 grid_size_mul(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul.y));
 
@@ -428,11 +439,7 @@ namespace cml
         thrust::fill(temp.attention_sum.begin(), temp.attention_sum.end(), 0.0f);
 
         // Norm before attention
-        float hidden_in_sq_norm = thrust::inner_product(temp.hidden_in.begin(), temp.hidden_in.end(), temp.hidden_in.begin(), 0.0f);
-        thrust::transform(temp.hidden_in.begin(), temp.hidden_in.end(),
-                          thrust::device_ptr<float>(weights.attention_norm),
-                          temp.norm_residual.begin(),
-                          ScaledMulFunctor(1.0f / std::sqrt(hidden_in_sq_norm / float(n) + eps)));
+        rms_norm_gpu_full(temp.hidden_in, temp.norm_residual, thrust::device_ptr<float>(weights.attention_norm));
 
         // Compute Q, K, V
         float qkv_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
