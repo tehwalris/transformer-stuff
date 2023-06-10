@@ -285,16 +285,18 @@ namespace cml
 
     struct Temp
     {
-      thrust::device_vector<float> hidden_in;               // n_hidden
-      thrust::device_vector<float> hidden_out;              // n_hidden
-      thrust::device_vector<float> norm_residual;           // n_hidden
-      thrust::device_vector<char4> norm_residual_quantized; // n_hidden
-      thrust::device_vector<float> q;                       // n_hidden
-      thrust::device_vector<float> k;                       // n_hidden
-      thrust::device_vector<float> v;                       // n_hidden
-      thrust::device_vector<float> attention;               // n_context * n_heads
-      thrust::device_vector<float> attention_sum;           // n_context
-      thrust::device_vector<float> attention_result;        // n_hidden
+      thrust::device_vector<float> hidden_in;                  // n_hidden
+      thrust::device_vector<float> hidden_out;                 // n_hidden
+      thrust::device_vector<float> norm_residual;              // n_hidden
+      thrust::device_vector<char4> norm_residual_quantized;    // n_hidden
+      thrust::device_vector<float> q;                          // n_hidden
+      thrust::device_vector<float> k;                          // n_hidden
+      thrust::device_vector<float> v;                          // n_hidden
+      thrust::device_vector<float> o;                          // n_hidden
+      thrust::device_vector<float> attention;                  // n_context * n_heads
+      thrust::device_vector<float> attention_sum;              // n_context
+      thrust::device_vector<float> attention_result;           // n_hidden
+      thrust::device_vector<char4> attention_result_quantized; // n_hidden
     };
 
     struct State
@@ -363,9 +365,11 @@ namespace cml
         temp.q.resize(params.n_hidden);
         temp.k.resize(params.n_hidden);
         temp.v.resize(params.n_hidden);
+        temp.o.resize(params.n_hidden);
         temp.attention.resize(params.n_context * params.n_heads);
         temp.attention_sum.resize(params.n_context);
         temp.attention_result.resize(params.n_hidden);
+        temp.attention_result_quantized.resize(params.n_hidden / 4);
 
         state.cache_k.resize(params.n_context * params.n_hidden);
         state.cache_v.resize(params.n_context * params.n_hidden);
@@ -419,6 +423,7 @@ namespace cml
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
         thrust::fill(temp.k.begin(), temp.k.end(), 0.0f);
         thrust::fill(temp.v.begin(), temp.v.end(), 0.0f);
+        thrust::fill(temp.o.begin(), temp.o.end(), 0.0f);
         thrust::fill(temp.attention.begin(), temp.attention.end(), 0.0f);
         thrust::fill(temp.attention_sum.begin(), temp.attention_sum.end(), 0.0f);
 
@@ -429,9 +434,8 @@ namespace cml
                           temp.norm_residual.begin(),
                           ScaledMulFunctor(1.0f / std::sqrt(hidden_in_sq_norm / float(n) + eps)));
 
-        float qkv_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
-
         // Compute Q, K, V
+        float qkv_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
         mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.q.data, temp.norm_residual_quantized.data().get(), temp.q.data().get());
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.q.data().get(), weights.q.scale, qkv_unquantize_scale);
         mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.k.data, temp.norm_residual_quantized.data().get(), temp.k.data().get());
@@ -457,12 +461,16 @@ namespace cml
         // Sum V weighted by softmax attention
         attention_sum_gpu<<<grid_size_attention_sum, block_size_attention_sum>>>(params.n_hidden, params.n_heads, state.new_i, state.cache_v.data().get(), temp.attention.data().get(), temp.attention_sum.data().get(), temp.attention_result.data().get());
 
-        // Projection
+        // Projection and residual
+        float projection_unquantize_scale = quantize_gpu_full(temp.attention_result, temp.attention_result_quantized);
+        mul_gpu<<<grid_size_mul, block_size_mul>>>(params.n_hidden, weights.o.data, temp.attention_result_quantized.data().get(), temp.o.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.o.data().get(), weights.o.scale, projection_unquantize_scale);
+        thrust::transform(temp.o.begin(), temp.o.end(), temp.hidden_in.begin(), temp.o.begin(), thrust::plus<float>());
 
         // TODO
 
         // TODO remove
-        thrust::copy(temp.v.begin(), temp.v.end(), hidden_out);
+        thrust::copy(temp.o.begin(), temp.o.end(), hidden_out);
 
         state.new_i++;
       }
