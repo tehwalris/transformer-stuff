@@ -2,6 +2,7 @@
 /matrix_multiplication
 /cuda_example
 /test
+/fill_copy_sequence
 
 *.o
 *.a

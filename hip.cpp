@@ -224,8 +224,8 @@ namespace cml
 
       QuantizedMatrix(uint32_t n, uint32_t m) : n(n), m(m)
       {
-        HIP_CHECK(hipMallocManaged(&data, n * (m / 4) * sizeof(char4)));
-        HIP_CHECK(hipMallocManaged(&scale, n * sizeof(float)));
+        HIP_CHECK(hipMalloc(&data, n * (m / 4) * sizeof(char4)));
+        HIP_CHECK(hipMalloc(&scale, n * sizeof(float)));
       }
 
       QuantizedMatrix(const QuantizedMatrix &) = delete;
@@ -264,6 +264,9 @@ namespace cml
 
       void fill_from_unquantized(const float *unquantized)
       {
+        std::vector<char4> *data_host = new std::vector<char4>(n * (m / 4));
+        std::vector<float> *scale_host = new std::vector<float>(n);
+
         for (uint32_t i = 0; i < n; i++)
         {
           float max_abs = 0;
@@ -277,17 +280,22 @@ namespace cml
           }
 
           float scale = max_abs / 127.0f;
-          this->scale[i] = scale;
+          (*scale_host)[i] = scale;
           float inv_scale = 1.0f / scale;
 
           for (uint32_t j = 0; j < m; j += 4)
           {
-            this->data[(i * m + j) / 4].x = (int8_t)(unquantized[i * m + j + 0] * inv_scale);
-            this->data[(i * m + j) / 4].y = (int8_t)(unquantized[i * m + j + 1] * inv_scale);
-            this->data[(i * m + j) / 4].z = (int8_t)(unquantized[i * m + j + 2] * inv_scale);
-            this->data[(i * m + j) / 4].w = (int8_t)(unquantized[i * m + j + 3] * inv_scale);
+            (*data_host)[(i * m + j) / 4].x = (int8_t)(unquantized[i * m + j + 0] * inv_scale);
+            (*data_host)[(i * m + j) / 4].y = (int8_t)(unquantized[i * m + j + 1] * inv_scale);
+            (*data_host)[(i * m + j) / 4].z = (int8_t)(unquantized[i * m + j + 2] * inv_scale);
+            (*data_host)[(i * m + j) / 4].w = (int8_t)(unquantized[i * m + j + 3] * inv_scale);
           }
         }
+
+        HIP_CHECK(hipMemcpy(data, data_host->data(), n * (m / 4) * sizeof(char4), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(scale, scale_host->data(), n * sizeof(float), hipMemcpyHostToDevice));
+        delete data_host;
+        delete scale_host;
       }
     };
 
@@ -366,23 +374,23 @@ namespace cml
           std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
 
           float *data;
-          HIP_CHECK(hipMallocManaged(&data, n * sizeof(float)));
+          HIP_CHECK(hipMalloc(&data, n * sizeof(float)));
 
           float *data_temp = loader->get_tensor_float(name, {n});
-          memcpy(data, data_temp, n * sizeof(float));
+          HIP_CHECK(hipMemcpy(data, data_temp, n * sizeof(float), hipMemcpyHostToDevice));
 
           return data;
         };
 
-        weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
-        weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
-        weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
-        weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
-        weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
-        weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
-        weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
-        weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
-        weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
+        // weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
+        // weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
+        // weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
+        // weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
+        // weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
+        // weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
+        // weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
+        // weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
+        // weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
 
         temp.hidden_in.resize(params.n_hidden);
         temp.hidden_out.resize(params.n_hidden);
@@ -450,7 +458,10 @@ namespace cml
                                            ceil_div<uint32_t>(params.n_heads, block_size_attention_sum.y));
 
         // Copy to GPU
+        std::cout << "DEBUG thrust::copy(" << hidden_in << ", " << hidden_in + n << ", " << temp.hidden_in.data() << ")" << std::endl;
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
+        typedef typename thrust::iterator_system<float *>::type System1;
+        return;
 
         // Zero accumulators
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
@@ -521,7 +532,7 @@ namespace cml
         thrust::transform(temp.l2.begin(), temp.l2.end(), temp.o.begin(), temp.l2.begin(), thrust::plus<float>());
 
         // Copy from GPU
-        thrust::copy(temp.l2.begin(), temp.l2.end(), hidden_out);
+        // thrust::copy(temp.l2.begin(), temp.l2.end(), hidden_out);
 
         state.new_i++;
       }

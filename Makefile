@@ -132,14 +132,16 @@ ifdef LLAMA_BLIS
 	LDFLAGS += -lblis -L/usr/local/lib
 endif
 ifdef LLAMA_CUBLAS
-	CFLAGS    += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include
-	CXXFLAGS  += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include
-	LDFLAGS   += -lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -lamdhip64 -L"/nix/store/46dd6kik93na64pb0cbqpsp4ghq5i0f5-hip-amd-5.4.4/lib" -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib
+	CFLAGS_NO_CUDA := $(CFLAGS)
+	CXXFLAGS_NO_CUDA := $(CXXFLAGS)
+	CFLAGS    += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NAIVE_PATH)/include
+	CXXFLAGS  += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NAIVE_PATH)/include
+	LDFLAGS   += -lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -lamdhip64 -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib -L$(CUDA_NAIVE_PATH)/lib
 	OBJS      += ggml-cuda.o
 	NVCC      = nvcc
 	NVCCFLAGS = --forward-unknown-to-host-compiler -arch=native
 	HIPCC 	  = hipcc
-	HIPCCFLAGS = -arch=native $(ROCM_INCLUDES)
+	HIPCCFLAGS = -arch=native -isystem $(ROCTHRUST_PATH)/include
 ifdef LLAMA_CUDA_DMMV_X
 	NVCCFLAGS += -DGGML_CUDA_DMMV_X=$(LLAMA_CUDA_DMMV_X)
 else
@@ -223,13 +225,19 @@ baseline.o: baseline.cpp baseline.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 cuda.o: cuda.cu cuda.h
-	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic -c $< -o $@
+	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -fvisibility=hidden -Wno-pedantic -c $< -o $@
+#	objcopy --localize-hidden $@
 
 hip.a: hip.cpp hip.h
-	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fPIC $(CXXFLAGS) -c $< -o $@
+	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
+#	objcopy --localize-hidden $@
+
+fill_copy_sequence.a: fill_copy_sequence.cpp fill_copy_sequence.h
+	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
+#	objcopy --localize-hidden $@
 
 clean:
-	rm -vf *.o *.a main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test
+	rm -vf *.o *.a main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test fill_copy_sequence
 
 matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
@@ -237,5 +245,11 @@ matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 cuda_example: cuda_example.cu
 	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 
-test: test.cpp baseline.o cuda.o hip.a loading.o ggml.o llama.o $(OBJS)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+# test: test.cpp baseline.o cuda.o hip.a fill_copy_sequence.a loading.o ggml.o llama.o $(OBJS)
+# 	$(CXX) $(CXXFLAGS_NO_CUDA) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+
+test: test.cpp cuda.o fill_copy_sequence.a loading.o ggml.o llama.o $(OBJS)
+	$(CXX) $(CXXFLAGS_NO_CUDA) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+
+fill_copy_sequence: fill_copy_sequence.cpp
+	$(HIPCC) $(HIPCCFLAGS) $(CXXFLAGS_NO_CUDA) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
