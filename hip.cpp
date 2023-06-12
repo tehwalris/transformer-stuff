@@ -35,8 +35,11 @@ namespace cml
         int sum = 0;
         for (int i_col = threadIdx.x; i_col < n_cols / 4; i_col += blockDim.x)
         {
-          // TODO
-          // sum = __dp4a(A[(i_row * n_cols) / 4 + i_col], x[i_col], sum);
+          char4 v = A[i_row * n_cols / 4 + i_col];
+          sum += int(v.x) * int(x[i_col].x) +
+                 int(v.y) * int(x[i_col].y) +
+                 int(v.z) * int(x[i_col].z) +
+                 int(v.w) * int(x[i_col].w);
         }
         atomicAdd(&y[i_row], float(sum));
       }
