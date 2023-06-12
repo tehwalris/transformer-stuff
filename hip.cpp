@@ -382,15 +382,15 @@ namespace cml
           return data;
         };
 
-        // weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
-        // weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
-        // weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
-        // weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
-        // weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
-        // weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
-        // weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
-        // weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
-        // weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
+        weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
+        weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
+        weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
+        weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
+        weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
+        weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
+        weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
+        weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
+        weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
 
         temp.hidden_in.resize(params.n_hidden);
         temp.hidden_out.resize(params.n_hidden);
@@ -458,10 +458,7 @@ namespace cml
                                            ceil_div<uint32_t>(params.n_heads, block_size_attention_sum.y));
 
         // Copy to GPU
-        std::cout << "DEBUG thrust::copy(" << hidden_in << ", " << hidden_in + n << ", " << temp.hidden_in.data() << ")" << std::endl;
         thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
-        typedef typename thrust::iterator_system<float *>::type System1;
-        return;
 
         // Zero accumulators
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
@@ -532,7 +529,7 @@ namespace cml
         thrust::transform(temp.l2.begin(), temp.l2.end(), temp.o.begin(), temp.l2.begin(), thrust::plus<float>());
 
         // Copy from GPU
-        // thrust::copy(temp.l2.begin(), temp.l2.end(), hidden_out);
+        thrust::copy(temp.l2.begin(), temp.l2.end(), hidden_out);
 
         state.new_i++;
       }
@@ -549,7 +546,9 @@ namespace cml
       State state;
     };
 
-    SimpleTransformerLayer *create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+    __attribute__((visibility("default")))
+    SimpleTransformerLayer *
+    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
     {
       return new LlamaLayer(loader, layer_index);
     }

@@ -232,12 +232,8 @@ hip.a: hip.cpp hip.h
 	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
 	llvm-objcopy --localize-hidden $@
 
-fill_copy_sequence.a: fill_copy_sequence.cpp fill_copy_sequence.h
-	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
-	llvm-objcopy --localize-hidden $@
-
 clean:
-	rm -vf *.o *.a main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test fill_copy_sequence
+	rm -vf *.o *.a main quantize quantize-stats perplexity embedding benchmark-matmult save-load-state server vdot build-info.h matrix_multiplication cuda_example test
 
 matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
@@ -245,8 +241,5 @@ matrix_multiplication: matrix_multiplication.cpp ggml.o llama.o $(OBJS)
 cuda_example: cuda_example.cu
 	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) -Wno-pedantic $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 
-test: test.cpp baseline.o cuda.o hip.a fill_copy_sequence.a loading.o ggml.o llama.o $(OBJS)
+test: test.cpp baseline.o cuda.o hip.a loading.o ggml.o llama.o $(OBJS)
 	$(CXX) $(CXXFLAGS_NO_CUDA) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
-
-fill_copy_sequence: fill_copy_sequence.cpp
-	$(HIPCC) $(HIPCCFLAGS) $(CXXFLAGS_NO_CUDA) $(filter-out %.h,$^) -o $@ $(LDFLAGS)

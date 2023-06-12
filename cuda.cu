@@ -539,7 +539,9 @@ namespace cml
       State state;
     };
 
-    SimpleTransformerLayer *create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+    __attribute__((visibility("default")))
+    SimpleTransformerLayer *
+    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
     {
       return new LlamaLayer(loader, layer_index);
     }
