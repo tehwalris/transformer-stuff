@@ -1,25 +1,16 @@
 use std::{env, path::PathBuf};
 
-extern crate bindgen;
-extern crate cc;
-
 fn main() {
-    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=cpp_src");
 
-    cc::Build::new().file("src/ggml.c").compile("ggml");
-
-    cc::Build::new()
-        .cpp(true)
-        .file("src/llama.cpp")
-        .file("src/loading.cpp")
-        .flag("-mavx2")
-        .flag("-mfma")
-        .flag("-mf16c")
-        .compile("cpp_stuff_cc");
+    let dst = cmake::build("cpp_src");
+    println!("cargo:rustc-link-search=native={}/lib", dst.display());
+    println!("cargo:rustc-link-lib=static=cpp_stuff_base");
+    println!("cargo:rustc-flags=-l dylib=stdc++");
 
     let bindings = bindgen::Builder::default()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-        .header("src/wrapper.h")
+        .header("cpp_src/wrapper.h")
         .clang_arg("-x")
         .clang_arg("c++")
         .opaque_type("std::.*")

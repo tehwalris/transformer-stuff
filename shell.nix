@@ -13,6 +13,7 @@ pkgs.mkShell {
     rust-analyzer
     rustfmt
     llvmPackages.libclang
+    cmake
   ];
   shellHook = ''
     export ROCTHRUST_PATH="${pkgs.rocthrust}"

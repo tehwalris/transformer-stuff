@@ -8,4 +8,4 @@ build = "build.rs"
 
 [build-dependencies]
 bindgen = "0.65.1"
-cc = "1.0.79"
+cmake = "0.1.50"
