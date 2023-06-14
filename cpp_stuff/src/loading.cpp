@@ -8,9 +8,9 @@ namespace cml
 
   const uint32_t cache_line_bytes = 64;
 
-  SimpleLlamaModelLoader::SimpleLlamaModelLoader(const std::string &fname_base)
+  SimpleLlamaModelLoader::SimpleLlamaModelLoader(const char *fname_base)
   {
-    loader = new_llama_model_loader(fname_base);
+    loader = new_llama_model_loader(std::string(fname_base));
     loading_buffer = nullptr;
     conversion_buffer = nullptr;
   }

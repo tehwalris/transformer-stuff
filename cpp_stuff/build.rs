@@ -6,10 +6,16 @@ extern crate cc;
 fn main() {
     println!("cargo:rerun-if-changed=src");
 
+    cc::Build::new().file("src/ggml.c").compile("ggml");
+
     cc::Build::new()
         .cpp(true)
-        .file("src/example.cpp")
-        .compile("example");
+        .file("src/llama.cpp")
+        .file("src/loading.cpp")
+        .flag("-mavx2")
+        .flag("-mfma")
+        .flag("-mf16c")
+        .compile("cpp_stuff_cc");
 
     let bindings = bindgen::Builder::default()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
