@@ -134,9 +134,9 @@ endif
 ifdef LLAMA_CUBLAS
 	CFLAGS_NO_CUDA := $(CFLAGS)
 	CXXFLAGS_NO_CUDA := $(CXXFLAGS)
-	CFLAGS    += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NAIVE_PATH)/include
-	CXXFLAGS  += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NAIVE_PATH)/include
-	LDFLAGS   += -lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -lamdhip64 -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib -L$(CUDA_NAIVE_PATH)/lib
+	CFLAGS    += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NATIVE_PATH)/include
+	CXXFLAGS  += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include -I$(CUDA_NATIVE_PATH)/include
+	LDFLAGS   +=-lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -lamdhip64 -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib -L$(CUDA_NATIVE_PATH)/lib
 	OBJS      += ggml-cuda.o
 	NVCC      = nvcc
 	NVCCFLAGS = --forward-unknown-to-host-compiler -arch=native

@@ -1,8 +1,10 @@
 fn do_thing(model_path: &str) {
     unsafe {
         let fname_base = std::ffi::CString::new(model_path).unwrap();
-        let mut x = cpp_stuff::cml_SimpleLlamaModelLoader::new(fname_base.as_ptr());
-        x.destruct();
+        let mut loader = cpp_stuff::cml_SimpleLlamaModelLoader::new(fname_base.as_ptr());
+        let model = cpp_stuff::cml_cuda_create_llama_layer(&mut loader, 0);
+        loader.destruct();
+        cpp_stuff::cml_delete_simple_transformer_layer(model);
     }
 }
 

@@ -413,8 +413,8 @@ namespace cml
 
       virtual ~LlamaLayer()
       {
-        free(weights.attention_norm);
-        free(weights.ff_norm);
+        cudaFree(weights.attention_norm);
+        cudaFree(weights.ff_norm);
       }
 
       virtual void forward(int n, float *hidden_in, float *hidden_out) override

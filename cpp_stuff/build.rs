@@ -6,7 +6,10 @@ fn main() {
     let dst = cmake::build("cpp_src");
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-lib=static=cpp_stuff_base");
-    println!("cargo:rustc-flags=-l dylib=stdc++");
+    println!("cargo:rustc-link-lib=static=cpp_stuff_cuda");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
+    println!("cargo:rustc-link-lib=cublas");
+    println!("cargo:rustc-link-lib=cudart");
 
     let bindings = bindgen::Builder::default()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
@@ -15,6 +18,9 @@ fn main() {
         .clang_arg("c++")
         .opaque_type("std::.*")
         .allowlist_type("cml::SimpleLlamaModelLoader")
+        .allowlist_type("cml::SimpleTransformerLayer")
+        .allowlist_function("cml::delete_simple_transformer_layer")
+        .allowlist_function("cml::cuda::create_llama_layer")
         .generate()
         .expect("Unable to generate bindings");
 
