@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "toy",
+    "cpp_stuff",
+]

@@ -92,5 +92,5 @@
     "loading.h": "c",
     "library_types.h": "c"
   },
-  "cSpell.words": ["ggml", "Hyperparams", "silu", "softmax"]
+  "cSpell.words": ["bindgen", "ggml", "Hyperparams", "silu", "softmax"]
 }

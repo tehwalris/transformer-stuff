@@ -3,6 +3,7 @@
 /cuda_example
 /test
 /fill_copy_sequence
+/target
 
 *.o
 *.a
