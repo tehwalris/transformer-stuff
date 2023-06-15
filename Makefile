@@ -229,7 +229,7 @@ cuda.o: cuda.cu cuda.h
 	llvm-objcopy --localize-hidden $@
 
 hip.a: hip.cpp hip.h
-	$(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
+	HIPCC_VERBOSE=1 $(HIPCC) $(HIPCCFLAGS) --emit-static-lib -fvisibility=hidden -fPIC $(CXXFLAGS_NO_CUDA) -c $< -o $@
 	llvm-objcopy --localize-hidden $@
 
 clean:
