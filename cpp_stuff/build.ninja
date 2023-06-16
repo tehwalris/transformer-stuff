@@ -31,8 +31,11 @@ rule cuda
 rule hip
   command = hipcc -MMD -MT $out -MF $out.d $hip_flags $extra_flags -c $in -o $out
 
-rule link_and_localize
-  command = ld -r $in -o $out && objcopy --localize-hidden $out
+rule localize
+  command = ld -r $in -o $out --exclude-libs=ALL && llvm-objcopy --localize-hidden $out
+  
+rule ar
+  command = ar rcs $out $in
 
 build $builddir/baseline.o: cxx $root/baseline.cpp
   extra_flags = -fvisibility=hidden
@@ -46,7 +49,11 @@ build $builddir/llama.o: cxx $root/llama.cpp
 build $builddir/loading.o: cxx $root/loading.cpp
 build $builddir/model.o: cxx $root/model.cpp
 
-build $builddir/shared.linked.o: link_and_localize $builddir/loading.o $builddir/model.o
-build $builddir/baseline.linked.o: link_and_localize $builddir/baseline.o $builddir/shared.linked.o
-build $builddir/cuda.linked.o: link_and_localize $builddir/cuda.o $builddir/shared.linked.o
-build $builddir/hip.linked.o: link_and_localize $builddir/hip.o $builddir/shared.linked.o
+build $builddir/llama.a: ar $builddir/llama.o $builddir/ggml.o
+
+build $builddir/shared.local.o: localize $builddir/loading.o $builddir/model.o $builddir/llama.a
+build $builddir/baseline.local.o: localize $builddir/baseline.o
+build $builddir/cuda.local.o: localize $builddir/cuda.o
+build $builddir/hip.local.o: localize $builddir/hip.o
+
+build $builddir/lib/libcpp_stuff.a: ar $builddir/shared.local.o $builddir/baseline.local.o $builddir/cuda.local.o $builddir/hip.local.o

@@ -2,13 +2,12 @@ use std::{env, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=cpp_src");
+    println!("cargo:rerun-if-changed=build.ninja");
 
-    let dst = cmake::build("cpp_src");
-    println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=cpp_stuff_loading");
-    println!("cargo:rustc-link-lib=static=cpp_stuff_baseline");
-    println!("cargo:rustc-link-lib=static=cpp_stuff_cuda");
-    println!("cargo:rustc-link-lib=static=cpp_stuff_hip");
+    // let dst = cmake::build("cpp_src");
+    // println!("cargo:rustc-link-search=native={}/lib", dst.display());
+    println!("cargo:rustc-link-search=native=/home/philippe/src/github.com/tehwalris/transformer-stuff/cpp_stuff/build/lib");
+    println!("cargo:rustc-link-lib=static=cpp_stuff");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=cublas");
     println!("cargo:rustc-link-lib=cudart");
