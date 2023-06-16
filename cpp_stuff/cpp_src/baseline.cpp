@@ -356,6 +356,64 @@ namespace cml
       State state;
     };
 
+    class LlamaFinalLayer : public SimpleTransformerLayer
+    {
+    public:
+      LlamaFinalLayer(SimpleLlamaModelLoader *loader)
+      {
+        llama_hparams *hparams = loader->get_hparams();
+        n_hidden = hparams->n_embd;
+        n_vocab = hparams->n_vocab;
+
+        temp_model_norm = aligned_alloc_floats(n_hidden);
+
+        float *data_temp;
+
+        weights_model_norm = aligned_alloc_floats(n_hidden);
+        data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
+        memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
+
+        weights_output_layer = aligned_alloc_floats(n_hidden * n_vocab);
+        data_temp = loader->get_tensor_float("output.weight", {n_hidden, n_vocab});
+        memcpy(weights_output_layer, data_temp, n_hidden * n_vocab * sizeof(float));
+      }
+
+      LlamaFinalLayer(const LlamaFinalLayer &) = delete;
+
+      virtual ~LlamaFinalLayer()
+      {
+        free(temp_model_norm);
+        free(weights_model_norm);
+        free(weights_output_layer);
+      }
+
+      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
+      {
+        assert(uint32_t(n) == n_hidden);
+
+        // Norm before output layer
+        rms_norm(n_hidden, hidden_in, temp_model_norm);
+        for (uint32_t i = 0; i < n_hidden; i++)
+        {
+          temp_model_norm[i] *= weights_model_norm[i];
+        }
+
+        // Output layer
+        matrix_vector_multiply(n_vocab, n_hidden, weights_output_layer, temp_model_norm, hidden_out);
+      }
+
+      virtual void reset() override
+      {
+      }
+
+    private:
+      uint32_t n_hidden;
+      uint32_t n_vocab;
+      float *temp_model_norm;
+      float *weights_model_norm;
+      float *weights_output_layer;
+    };
+
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
     create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
@@ -363,5 +421,11 @@ namespace cml
       return new LlamaLayer(loader, layer_index);
     }
 
+    __attribute__((visibility("default")))
+    SimpleTransformerLayer *
+    create_llama_final_layer(SimpleLlamaModelLoader *loader)
+    {
+      return new LlamaFinalLayer(loader);
+    }
   };
 };
