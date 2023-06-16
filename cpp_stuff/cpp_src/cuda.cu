@@ -417,7 +417,7 @@ namespace cml
         cudaFree(weights.ff_norm);
       }
 
-      virtual void forward(int n, float *hidden_in, float *hidden_out) override
+      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
       {
         assert(uint32_t(n) == params.n_hidden);
         assert(state.new_i < params.n_context);

@@ -26,6 +26,7 @@ fn main() {
         .allowlist_function("cml::simple_transformer_layer_delete")
         .allowlist_function("cml::simple_transformer_layer_forward")
         .allowlist_function("cml::simple_transformer_layer_reset")
+        .allowlist_function("cml::baseline::create_llama_layer")
         .allowlist_function("cml::cuda::create_llama_layer")
         .allowlist_function("cml::hip::create_llama_layer")
         .generate()

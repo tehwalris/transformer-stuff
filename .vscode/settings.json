@@ -93,7 +93,9 @@
     "version": "cpp",
     "__split_buffer": "cpp",
     "loading.h": "c",
-    "library_types.h": "c"
+    "library_types.h": "c",
+    "__memory": "cpp",
+    "variant": "cpp"
   },
   "cSpell.words": ["bindgen", "cuda", "ggml", "Hyperparams", "silu", "softmax"]
 }

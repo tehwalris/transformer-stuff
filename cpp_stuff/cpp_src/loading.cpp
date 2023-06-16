@@ -91,7 +91,7 @@ namespace cml
     }
   }
 
-  llama_hparams *SimpleLlamaModelLoader::get_hparams()
+  llama_hparams *SimpleLlamaModelLoader::get_hparams() const
   {
     return llama_model_loader_get_hparams(loader);
   }

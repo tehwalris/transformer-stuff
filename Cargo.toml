@@ -3,4 +3,5 @@
 members = [
     "toy",
     "cpp_stuff",
+    "cpp_stuff_nice",
 ]

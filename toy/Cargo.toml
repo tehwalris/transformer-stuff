@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cpp_stuff = { path = "../cpp_stuff" }
+cpp_stuff_nice = { path = "../cpp_stuff_nice" }
 rand = "0.8.5"
 rand_distr = "0.4.3"

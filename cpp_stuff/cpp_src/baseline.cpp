@@ -19,7 +19,7 @@ namespace cml
       uint32_t n_ff;
     };
 
-    void rms_norm(uint32_t n, float *in, float *out)
+    void rms_norm(uint32_t n, const float *in, float *out)
     {
       float eps = 1e-6;
 
@@ -283,7 +283,7 @@ namespace cml
         free(state.cache_v);
       }
 
-      virtual void forward(int n, float *hidden_in, float *hidden_out) override
+      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
       {
         assert(uint32_t(n) == params.n_hidden);
         assert(state.new_i < params.n_context);

@@ -87,6 +87,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpp_stuff_nice"
+version = "0.1.0"
+dependencies = [
+ "cpp_stuff",
+]
+
+[[package]]
 name = "either"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -309,7 +316,7 @@ dependencies = [
 name = "toy"
 version = "0.1.0"
 dependencies = [
- "cpp_stuff",
+ "cpp_stuff_nice",
  "rand",
  "rand_distr",
 ]

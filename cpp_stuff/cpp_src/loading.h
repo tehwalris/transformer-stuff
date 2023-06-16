@@ -15,7 +15,7 @@ namespace cml
     ~SimpleLlamaModelLoader();
 
     float *get_tensor_float(const std::string &name, const std::vector<uint32_t> &shape);
-    llama_hparams *get_hparams();
+    llama_hparams *get_hparams() const;
 
   private:
     llama_model_loader *loader;

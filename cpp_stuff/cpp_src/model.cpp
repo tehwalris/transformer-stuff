@@ -7,7 +7,7 @@ namespace cml
     delete layer;
   }
 
-  void simple_transformer_layer_forward(SimpleTransformerLayer *layer, int n, float *hidden_in, float *hidden_out)
+  void simple_transformer_layer_forward(SimpleTransformerLayer *layer, int n, const float *hidden_in, float *hidden_out)
   {
     layer->forward(n, hidden_in, hidden_out);
   }
