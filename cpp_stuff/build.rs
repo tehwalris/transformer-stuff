@@ -5,7 +5,8 @@ fn main() {
 
     let dst = cmake::build("cpp_src");
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-lib=static=cpp_stuff_base");
+    println!("cargo:rustc-link-lib=static=cpp_stuff_loading");
+    println!("cargo:rustc-link-lib=static=cpp_stuff_baseline");
     println!("cargo:rustc-link-lib=static=cpp_stuff_cuda");
     println!("cargo:rustc-link-lib=static=cpp_stuff_hip");
     println!("cargo:rustc-link-lib=dylib=stdc++");

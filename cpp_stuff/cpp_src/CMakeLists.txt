@@ -18,8 +18,14 @@ add_library(ggml OBJECT ggml.c ggml.h)
 
 add_library(llama OBJECT llama.cpp llama.h llama-util.h)
 
-add_library(cpp_stuff_base loading.cpp model.cpp)
-target_link_libraries(cpp_stuff_base PRIVATE llama ggml)
+add_library(cpp_stuff_loading loading.cpp model.cpp)
+target_link_libraries(cpp_stuff_loading PRIVATE llama ggml)
+
+add_library(cpp_stuff_baseline baseline.cpp)
+target_link_libraries(cpp_stuff_baseline PRIVATE cpp_stuff_loading)
+add_custom_command(TARGET cpp_stuff_baseline POST_BUILD
+  COMMAND llvm-objcopy --localize-hidden $<TARGET_FILE:cpp_stuff_baseline>
+)
 
 add_library(cpp_stuff_cuda cuda.cu)
 target_compile_options(cpp_stuff_cuda PRIVATE -fvisibility=hidden)
@@ -37,6 +43,7 @@ add_custom_command(TARGET cpp_stuff_hip POST_BUILD
   COMMAND llvm-objcopy --localize-hidden $<TARGET_FILE:cpp_stuff_hip>
 )
 
-install(TARGETS cpp_stuff_base)
+install(TARGETS cpp_stuff_loading)
+install(TARGETS cpp_stuff_baseline)
 install(TARGETS cpp_stuff_cuda)
 install(TARGETS cpp_stuff_hip)
