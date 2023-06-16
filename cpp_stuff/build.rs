@@ -22,6 +22,7 @@ fn main() {
         .opaque_type("std::.*")
         .allowlist_type("cml::SimpleLlamaModelLoader")
         .allowlist_type("cml::SimpleTransformerLayer")
+        .allowlist_type("llama_hparams")
         .allowlist_function("cml::simple_transformer_layer_delete")
         .allowlist_function("cml::simple_transformer_layer_forward")
         .allowlist_function("cml::simple_transformer_layer_reset")
