@@ -7,9 +7,11 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-lib=static=cpp_stuff_base");
     println!("cargo:rustc-link-lib=static=cpp_stuff_cuda");
+    println!("cargo:rustc-link-lib=static=cpp_stuff_hip");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=cublas");
     println!("cargo:rustc-link-lib=cudart");
+    println!("cargo:rustc-link-lib=amdhip64");
 
     let bindings = bindgen::Builder::default()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
@@ -21,6 +23,7 @@ fn main() {
         .allowlist_type("cml::SimpleTransformerLayer")
         .allowlist_function("cml::delete_simple_transformer_layer")
         .allowlist_function("cml::cuda::create_llama_layer")
+        .allowlist_function("cml::hip::create_llama_layer")
         .generate()
         .expect("Unable to generate bindings");
 

@@ -11,8 +11,5 @@ namespace cml
         virtual void reset() = 0;
     };
 
-    void delete_simple_transformer_layer(SimpleTransformerLayer *layer)
-    {
-        delete layer;
-    }
+    void delete_simple_transformer_layer(SimpleTransformerLayer *layer);
 };

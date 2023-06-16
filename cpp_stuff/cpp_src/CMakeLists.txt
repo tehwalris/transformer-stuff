@@ -18,7 +18,7 @@ add_library(ggml OBJECT ggml.c ggml.h)
 
 add_library(llama OBJECT llama.cpp llama.h llama-util.h)
 
-add_library(cpp_stuff_base loading.cpp)
+add_library(cpp_stuff_base loading.cpp model.cpp)
 target_link_libraries(cpp_stuff_base PRIVATE llama ggml)
 
 add_library(cpp_stuff_cuda cuda.cu)
@@ -29,9 +29,13 @@ add_custom_command(TARGET cpp_stuff_cuda POST_BUILD
 )
 
 add_library(cpp_stuff_hip hip.cpp)
+target_compile_options(cpp_stuff_hip PRIVATE -fvisibility=hidden)
 set_source_files_properties(hip.cpp PROPERTIES LANGUAGE HIP)
 target_link_libraries(cpp_stuff_hip PRIVATE roc::rocthrust)
 target_compile_definitions(cpp_stuff_hip PRIVATE THRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_HIP)
+add_custom_command(TARGET cpp_stuff_hip POST_BUILD
+  COMMAND llvm-objcopy --localize-hidden $<TARGET_FILE:cpp_stuff_hip>
+)
 
 install(TARGETS cpp_stuff_base)
 install(TARGETS cpp_stuff_cuda)
