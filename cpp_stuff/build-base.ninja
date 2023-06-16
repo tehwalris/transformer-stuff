@@ -1,23 +1,14 @@
-ninja_required_version = 1.3
-
-root = ./cpp_src
-builddir = ./build
-
-rocthrust_include_path = /nix/store/7bww6ks9hiiqllxzhkil3fzj35h92yin-rocthrust-5.4.3/include
-
-cpu_flags = -march=native -mtune=native -mavx2 -mfma -mf16c
-
 cxx_warnings = -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-multichar
-cxx_flags = -g -O3 -std=c++17 -fPIC $cxx_warnings $cpu_flags
+cxx_flags = $shared_compiler_flags -std=c++17 $cxx_warnings $cpu_flags
 
 c_warnings = -Wall -Wextra -Wpedantic -Wcast-qual -Wdouble-promotion -Wshadow -Wstrict-prototypes -Wpointer-arith
-c_flags = -g -O3 -std=c17 -fPIC $c_warnings $cpu_flags
+c_flags = $shared_compiler_flags -std=c17 $c_warnings $cpu_flags
 
 cuda_warnings = -Wall -Wextra -Wcast-qual -Wno-unused-function -Wno-multichar
-cuda_flags = -g -O3 -std=c++17 -fPIC --forward-unknown-to-host-compiler -arch=native $cuda_warnings $cpu_flags
+cuda_flags = $shared_compiler_flags -std=c++17 --forward-unknown-to-host-compiler -arch=native $cuda_warnings $cpu_flags
 
 hip_warnings = $cxx_warnings
-hip_flags = -g -O3 -std=c++17 -fPIC -arch=native -isystem $rocthrust_include_path $hip_warnings $cpu_flags
+hip_flags = $shared_compiler_flags -std=c++17 -arch=native $rocthrust_include_flags $hip_warnings $cpu_flags
 
 rule cxx
   command = g++ -MMD -MT $out -MF $out.d $cxx_flags $extra_flags -c $in -o $out
