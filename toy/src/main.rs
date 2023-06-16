@@ -6,9 +6,9 @@ fn do_thing(model_path: &str) {
         let cuda_model = cpp_stuff::cml_cuda_create_llama_layer(&mut loader, 0);
         let hip_model = cpp_stuff::cml_hip_create_llama_layer(&mut loader, 0);
         loader.destruct();
-        cpp_stuff::cml_delete_simple_transformer_layer(baseline_model);
-        cpp_stuff::cml_delete_simple_transformer_layer(cuda_model);
-        cpp_stuff::cml_delete_simple_transformer_layer(hip_model);
+        cpp_stuff::cml_simple_transformer_layer_delete(baseline_model);
+        cpp_stuff::cml_simple_transformer_layer_delete(cuda_model);
+        cpp_stuff::cml_simple_transformer_layer_delete(hip_model);
     }
 }
 
