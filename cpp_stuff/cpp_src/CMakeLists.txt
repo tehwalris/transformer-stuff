@@ -14,9 +14,13 @@ find_dependency(AMDDeviceLibs)
 add_compile_options("$<$<COMPILE_LANGUAGE:HIP>:SHELL:-x hip --rocm-device-lib-path=${AMD_DEVICE_LIBS_PREFIX}/amdgcn/bitcode -std=c++17>")
 set(CMAKE_INCLUDE_SYSTEM_FLAG_HIP "-isystem ")
 
-add_library(ggml OBJECT ggml.c ggml.h)
+add_library(ggml STATIC ggml.c ggml.h)
 
-add_library(llama OBJECT llama.cpp llama.h llama-util.h)
+add_library(llama STATIC llama.cpp llama.h llama-util.h)
+target_compile_options(llama PRIVATE -fvisibility=hidden)
+# add_custom_command(TARGET llama POST_BUILD
+#   COMMAND llvm-objcopy --localize-hidden $<TARGET_FILE:llama>
+# )
 
 add_library(cpp_stuff_loading loading.cpp model.cpp)
 target_link_libraries(cpp_stuff_loading PRIVATE llama ggml)

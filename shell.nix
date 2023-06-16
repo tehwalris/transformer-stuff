@@ -16,6 +16,7 @@ pkgs.mkShell {
     llvmPackages.libclang
     cmake
     rocm-device-libs
+    ninja
   ];
   shellHook = ''
     export ROCTHRUST_PATH="${pkgs.rocthrust}"

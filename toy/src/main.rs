@@ -42,6 +42,21 @@ fn do_thing(model_path: &str) {
     }
 }
 
+fn do_other_thing(model_path: &str) {
+    let mut loader = llm_base::Loader::<llm_llama::Hyperparameters, _>::new(|_| {});
+    let mut file = std::io::BufReader::new(std::fs::File::open(model_path).unwrap());
+    ggml::format::load(&mut file, &mut loader).unwrap();
+
+    let n_hidden = loader.hyperparameters.n_embd;
+    let n_vocab = loader.hyperparameters.n_vocab;
+
+    let vocab_embeddings_tensor_info = loader
+        .tensors
+        .get(&"tok_embeddings.weight".to_string())
+        .unwrap();
+    assert_eq!(vocab_embeddings_tensor_info.dims(), &[n_vocab, n_hidden]);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -51,6 +66,7 @@ fn main() {
     let model_path = &args[1];
 
     println!("Hello, world!");
+    do_other_thing(model_path);
     do_thing(model_path);
     println!("Goodbye, world!")
 }

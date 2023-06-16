@@ -1,7 +1,7 @@
 #include <hip/hip_runtime.h>
 #include <cassert>
-#include "thrust/device_vector.h"
-#include "thrust/inner_product.h"
+#include <thrust/device_vector.h>
+#include <thrust/inner_product.h>
 #include "hip.h"
 
 namespace cml
@@ -423,8 +423,8 @@ namespace cml
 
       virtual ~LlamaLayer()
       {
-        hipFree(weights.attention_norm);
-        hipFree(weights.ff_norm);
+        HIP_CHECK(hipFree(weights.attention_norm));
+        HIP_CHECK(hipFree(weights.ff_norm));
       }
 
       virtual void forward(int n, const float *hidden_in, float *hidden_out) override
@@ -440,9 +440,6 @@ namespace cml
 
         const int block_size_scale(256);
         const int grid_size_scale(ceil_div<uint32_t>(params.n_hidden, block_size_scale));
-
-        const int block_size_quantize(256);
-        const int grid_size_quantize(ceil_div<uint32_t>(params.n_hidden, block_size_quantize));
 
         const dim3 block_size_rope(64, 1);
         const dim3 grid_size_rope(ceil_div<uint32_t>(params.n_hidden / params.n_heads / 2, block_size_rope.x), params.n_heads);

@@ -97,5 +97,13 @@
     "__memory": "cpp",
     "variant": "cpp"
   },
-  "cSpell.words": ["bindgen", "cuda", "ggml", "Hyperparams", "silu", "softmax"]
+  "cSpell.words": [
+    "bindgen",
+    "builddir",
+    "cuda",
+    "ggml",
+    "Hyperparams",
+    "silu",
+    "softmax"
+  ]
 }
