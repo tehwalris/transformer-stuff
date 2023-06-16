@@ -54,7 +54,7 @@ fn do_other_thing(model_path: &str) {
         .tensors
         .get(&"tok_embeddings.weight".to_string())
         .unwrap();
-    assert_eq!(vocab_embeddings_tensor_info.dims(), &[n_vocab, n_hidden]);
+    assert_eq!(vocab_embeddings_tensor_info.dims(), &[n_hidden, n_vocab]); // This is in GGML order (contiguous index first)
 }
 
 fn main() {

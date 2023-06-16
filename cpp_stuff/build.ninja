@@ -32,7 +32,7 @@ rule hip
   command = hipcc -MMD -MT $out -MF $out.d $hip_flags $extra_flags -c $in -o $out
 
 rule localize
-  command = ld -r $in -o $out --exclude-libs=ALL && llvm-objcopy --localize-hidden $out
+  command = ld -r $in -o $out $exclude_libs && llvm-objcopy --localize-hidden $out
   
 rule ar
   command = ar rcs $out $in
@@ -52,6 +52,7 @@ build $builddir/model.o: cxx $root/model.cpp
 build $builddir/llama.a: ar $builddir/llama.o $builddir/ggml.o
 
 build $builddir/shared.local.o: localize $builddir/loading.o $builddir/model.o $builddir/llama.a
+  exclude_libs = --exclude-libs=ALL
 build $builddir/baseline.local.o: localize $builddir/baseline.o
 build $builddir/cuda.local.o: localize $builddir/cuda.o
 build $builddir/hip.local.o: localize $builddir/hip.o
