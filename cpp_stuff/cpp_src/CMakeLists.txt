@@ -11,7 +11,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mf16c")
 set(CMAKE_HIP_ARCHITECTURES gfx900)
 find_package(rocthrust REQUIRED)
 find_dependency(AMDDeviceLibs)
-add_compile_options("$<$<COMPILE_LANGUAGE:HIP>:SHELL:-x hip --rocm-device-lib-path=${AMD_DEVICE_LIBS_PREFIX}/amdgcn/bitcode>")
+add_compile_options("$<$<COMPILE_LANGUAGE:HIP>:SHELL:-x hip --rocm-device-lib-path=${AMD_DEVICE_LIBS_PREFIX}/amdgcn/bitcode -std=c++17>")
+set(CMAKE_INCLUDE_SYSTEM_FLAG_HIP "-isystem ")
 
 add_library(ggml OBJECT ggml.c ggml.h)
 
