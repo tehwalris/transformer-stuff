@@ -1,5 +1,8 @@
 {
   "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix",
+  "explorer.autoRevealExclude": {
+    "target": true
+  },
   "files.associations": {
     "*.tcc": "cpp",
     "algorithm": "cpp",
