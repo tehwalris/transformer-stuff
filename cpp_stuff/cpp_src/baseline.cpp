@@ -373,9 +373,9 @@ namespace cml
         data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
         memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
 
-        weights_output_layer = aligned_alloc_floats(n_hidden * n_vocab);
-        data_temp = loader->get_tensor_float("output.weight", {n_hidden, n_vocab});
-        memcpy(weights_output_layer, data_temp, n_hidden * n_vocab * sizeof(float));
+        weights_output_layer = aligned_alloc_floats(n_vocab * n_hidden);
+        data_temp = loader->get_tensor_float("output.weight", {n_vocab, n_hidden});
+        memcpy(weights_output_layer, data_temp, n_vocab * n_hidden * sizeof(float));
       }
 
       LlamaFinalLayer(const LlamaFinalLayer &) = delete;

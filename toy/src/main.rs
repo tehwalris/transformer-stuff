@@ -1,12 +1,117 @@
 #![feature(iter_array_chunks)]
 
-use std::io::{BufRead, Seek};
+use std::{
+    io::{BufRead, Seek},
+    path::Path,
+    sync::Mutex,
+    thread,
+};
 
+use cpp_stuff_nice::SimpleTransformerLayer;
 use ggml::format::TensorLoadInfo;
 use half::f16;
 use llm_base::{TokenUtf8Buffer, Vocabulary};
 use rand::Rng;
 use rand_distr::StandardNormal;
+use rayon::prelude::*;
+
+enum Backend {
+    Baseline,
+    Cuda,
+    Hip,
+}
+
+impl Backend {
+    fn create_llama_layer(
+        &self,
+        loader: &mut cpp_stuff_nice::SimpleLlamaModelLoader,
+        i_layer: usize,
+    ) -> SimpleTransformerLayer {
+        let i_layer = i_layer.try_into().unwrap();
+        match self {
+            Backend::Baseline => cpp_stuff_nice::baseline::create_llama_layer(loader, i_layer),
+            Backend::Cuda => cpp_stuff_nice::cuda::create_llama_layer(loader, i_layer),
+            Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer),
+        }
+    }
+}
+
+struct Model {
+    n_hidden: usize,
+    layers: Vec<SimpleTransformerLayer>,
+    final_layer: SimpleTransformerLayer,
+}
+
+struct ProgressCallerInner {
+    total_progress: f32,
+    progress_callback: Box<dyn Fn(f32) -> () + Send + Sync>,
+}
+
+struct ProgressCaller(Mutex<ProgressCallerInner>);
+
+impl ProgressCaller {
+    fn new(progress_callback: Box<dyn Fn(f32) -> () + Send + Sync>) -> Self {
+        Self(Mutex::new(ProgressCallerInner {
+            total_progress: 0.0,
+            progress_callback,
+        }))
+    }
+
+    fn add_progress(&self, progress: f32) {
+        assert!(progress >= 0.0 && progress <= 1.0);
+
+        let mut inner = self.0.lock().unwrap();
+        inner.total_progress += progress;
+        if inner.total_progress > 1.0 {
+            inner.total_progress = 1.0;
+        }
+        (inner.progress_callback)(inner.total_progress);
+    }
+}
+
+impl Model {
+    fn load(
+        path: impl AsRef<Path>,
+        layer_backends: &[Backend],
+        progress_callback: Box<dyn Fn(f32) -> () + Send + Sync>,
+    ) -> Self {
+        let path = path.as_ref().to_str().unwrap().to_owned();
+
+        let loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
+        let n_hidden = usize::try_from(loader.n_hidden()).unwrap();
+        let n_layers = usize::try_from(loader.n_layers()).unwrap();
+        drop(loader);
+
+        assert_eq!(layer_backends.len(), n_layers);
+
+        let path_for_final_layer = path.clone();
+        let final_layer_thread = thread::spawn(move || {
+            let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path_for_final_layer);
+            cpp_stuff_nice::baseline::create_llama_final_layer(&mut loader)
+        });
+
+        let progress_caller = ProgressCaller::new(Box::new(progress_callback));
+        let progress_per_layer = 1.0 / n_layers as f32;
+        let layers: Vec<SimpleTransformerLayer> = layer_backends
+            .par_iter()
+            .enumerate()
+            .map(|(i_layer, backend)| {
+                let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
+                let layer = backend.create_llama_layer(&mut loader, i_layer);
+                progress_caller.add_progress(progress_per_layer);
+                layer
+            })
+            .collect();
+
+        let final_layer = final_layer_thread.join().unwrap();
+
+        Self {
+            n_hidden,
+            layers,
+            final_layer,
+        }
+    }
+}
 
 fn do_thing(model_path: &str) {
     let mut rng = rand::thread_rng();
@@ -139,6 +244,24 @@ fn main() {
         }
     }
     println!();
+
+    let mut layer_backends = vec![];
+    for _ in 0..16 {
+        layer_backends.push(Backend::Cuda);
+    }
+    for _ in 0..16 {
+        layer_backends.push(Backend::Hip);
+    }
+
+    println!("Loading model");
+    let model = Model::load(
+        model_path,
+        &layer_backends,
+        Box::new(|progress| {
+            println!("Loading model: {:.2}%", progress * 100.0);
+        }),
+    );
+    println!("Done loading model");
 
     println!("Doing thing");
     do_thing(model_path);

@@ -15,6 +15,10 @@ impl SimpleLlamaModelLoader {
     pub fn n_hidden(&self) -> u32 {
         unsafe { (*self.0.get_hparams()).n_embd }
     }
+
+    pub fn n_layers(&self) -> u32 {
+        unsafe { (*self.0.get_hparams()).n_layer }
+    }
 }
 
 impl Drop for SimpleLlamaModelLoader {
@@ -48,6 +52,8 @@ impl Drop for SimpleTransformerLayer {
         unsafe { cml_simple_transformer_layer_delete(self.0) }
     }
 }
+
+unsafe impl Send for SimpleTransformerLayer {}
 
 pub mod baseline {
     use super::*;

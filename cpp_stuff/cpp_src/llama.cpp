@@ -368,7 +368,7 @@ struct llama_file_loader
   llama_file_loader(const char *fname, size_t file_idx, llama_load_tensors_map &tensors_map)
       : file(fname, "rb")
   {
-    fprintf(stderr, "llama.cpp: loading model from %s\n", fname);
+    // fprintf(stderr, "llama.cpp: loading model from %s\n", fname);
     read_magic();
     read_hparams();
     read_vocab();
