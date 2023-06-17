@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 cpp_stuff_nice = { path = "../cpp_stuff_nice" }
 ggml = "0.1.1"
+half = { version = "2.2.1", features = ["use-intrinsics"] }
 llm-base = "0.1.1"
 llm-llama = "0.1.1"
 rand = "0.8.5"

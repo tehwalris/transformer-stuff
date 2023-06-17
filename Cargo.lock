@@ -451,6 +451,7 @@ version = "0.1.0"
 dependencies = [
  "cpp_stuff_nice",
  "ggml",
+ "half",
  "llm-base",
  "llm-llama",
  "rand",
