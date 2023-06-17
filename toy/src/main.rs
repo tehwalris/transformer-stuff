@@ -4,7 +4,7 @@ use std::io::{BufRead, Seek};
 
 use ggml::format::TensorLoadInfo;
 use half::f16;
-use llm_base::Vocabulary;
+use llm_base::{TokenUtf8Buffer, Vocabulary};
 use rand::Rng;
 use rand_distr::StandardNormal;
 
@@ -127,6 +127,18 @@ fn main() {
         token_id,
         &vocab_embeddings.get_embedding(token_id)[..10]
     );
+
+    let input_text = "This is a test";
+    let input_tokens = vocab.tokenize(input_text, true).unwrap();
+
+    println!("Testing token printing");
+    let mut token_print_buffer = TokenUtf8Buffer::new();
+    for &(token_bytes, _) in input_tokens.iter() {
+        if let Some(valid_str) = token_print_buffer.push(&token_bytes) {
+            print!("{}", valid_str);
+        }
+    }
+    println!();
 
     println!("Doing thing");
     do_thing(model_path);
