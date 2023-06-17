@@ -1,3 +1,5 @@
+#![feature(exit_status_error)]
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -90,6 +92,8 @@ fn main() {
     Command::new("ninja")
         .current_dir(&out_relative_path("."))
         .status()
+        .unwrap()
+        .exit_ok()
         .unwrap();
 
     println!(
@@ -121,6 +125,7 @@ fn main() {
         .allowlist_function("cml::baseline::create_llama_layer")
         .allowlist_function("cml::baseline::create_llama_final_layer")
         .allowlist_function("cml::cuda::create_llama_layer")
+        .allowlist_function("cml::cuda::create_llama_final_layer")
         .allowlist_function("cml::hip::create_llama_layer")
         .generate()
         .expect("Unable to generate bindings");
