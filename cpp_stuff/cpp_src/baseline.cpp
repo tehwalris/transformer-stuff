@@ -283,9 +283,10 @@ namespace cml
         free(state.cache_v);
       }
 
-      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
       {
-        assert(uint32_t(n) == params.n_hidden);
+        assert(uint32_t(n_in) == params.n_hidden);
+        assert(uint32_t(n_out) == params.n_hidden);
         assert(state.new_i < params.n_context);
 
         // Norm before attention
@@ -387,9 +388,10 @@ namespace cml
         free(weights_output_layer);
       }
 
-      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
       {
-        assert(uint32_t(n) == n_hidden);
+        assert(uint32_t(n_in) == n_hidden);
+        assert(uint32_t(n_out) == n_vocab);
 
         // Norm before output layer
         rms_norm(n_hidden, hidden_in, temp_model_norm);

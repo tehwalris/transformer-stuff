@@ -1,14 +1,14 @@
 #![feature(iter_array_chunks)]
 
 use std::{
-    io::{BufRead, Seek},
+    io::{self, BufRead, Seek, Write},
     path::Path,
     thread,
 };
 
 use cpp_stuff_nice::SimpleTransformerLayer;
 use ggml::format::TensorLoadInfo;
-use half::f16;
+use half::{f16, slice::HalfFloatSliceExt};
 use indicatif::ProgressBar;
 use llm_base::{TokenUtf8Buffer, Vocabulary};
 use rayon::prelude::*;
@@ -36,6 +36,8 @@ impl Backend {
 
 struct Model {
     n_hidden: usize,
+    n_vocab: usize,
+    n_context: usize,
     layers: Vec<SimpleTransformerLayer>,
     final_layer: SimpleTransformerLayer,
 }
@@ -47,6 +49,8 @@ impl Model {
         let loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
         let n_hidden = usize::try_from(loader.n_hidden()).unwrap();
         let n_layers = usize::try_from(loader.n_layers()).unwrap();
+        let n_vocab = usize::try_from(loader.n_vocab()).unwrap();
+        let n_context = usize::try_from(loader.n_context()).unwrap();
         drop(loader);
 
         let progress_bar = if show_progress {
@@ -78,16 +82,43 @@ impl Model {
 
         Self {
             n_hidden,
+            n_vocab,
+            n_context,
             layers,
             final_layer,
         }
+    }
+
+    fn predict(&mut self, hidden_in: &[f32]) -> Vec<f32> {
+        assert_eq!(hidden_in.len(), self.n_hidden);
+
+        let mut hidden_in = hidden_in.to_vec();
+        let mut hidden_out = vec![0.0; self.n_hidden];
+
+        for layer in &mut self.layers {
+            hidden_out.fill(0.0);
+            layer.forward(&mut hidden_in, &mut hidden_out);
+            std::mem::swap(&mut hidden_in, &mut hidden_out);
+        }
+
+        let mut final_out = vec![0.0; self.n_vocab];
+        self.final_layer.forward(&mut hidden_in, &mut final_out);
+
+        final_out
+    }
+
+    fn reset(&mut self) {
+        for layer in &mut self.layers {
+            layer.reset();
+        }
+        self.final_layer.reset();
     }
 }
 
 struct VocabEmbeddings {
     n_hidden: usize,
     n_vocab: usize,
-    embeddings: Vec<f16>,
+    embeddings: Vec<f32>,
 }
 
 impl VocabEmbeddings {
@@ -100,23 +131,25 @@ impl VocabEmbeddings {
         assert_eq!(info.dims(), &[n_hidden, n_vocab]); // This is in GGML order (contiguous index first)
         assert_eq!(info.element_type, ggml::ElementType::F16);
 
-        let embeddings: Vec<f16> = info
+        let embeddings_f16: Vec<f16> = info
             .read_data(reader)
             .unwrap()
             .into_iter()
             .array_chunks()
             .map(f16::from_le_bytes)
             .collect();
-        assert_eq!(embeddings.len(), n_hidden * n_vocab);
+        let mut embeddings_f32: Vec<f32> = vec![0.0; n_hidden * n_vocab];
+        assert_eq!(embeddings_f16.len(), embeddings_f32.len());
+        embeddings_f16.convert_to_f32_slice(&mut embeddings_f32);
 
         Self {
             n_hidden,
             n_vocab,
-            embeddings,
+            embeddings: embeddings_f32,
         }
     }
 
-    fn get_embedding(&self, i: usize) -> &[f16] {
+    fn get_embedding(&self, i: usize) -> &[f32] {
         assert!(i < self.n_vocab);
         let offset = i * self.n_hidden;
         &self.embeddings[offset..offset + self.n_hidden]
@@ -162,17 +195,39 @@ fn main() {
 
     println!("Loading model...");
     let (vocab, vocab_embeddings) = load_vocab(model_path);
-    let model = Model::load(model_path, &layer_backends, true);
+    let mut model = Model::load(model_path, &layer_backends, true);
 
-    let input_text = "This is a test";
-    let input_tokens = vocab.tokenize(input_text, true).unwrap();
+    let input_text = "5 JavaScript edge cases that broke prod\n";
+    let input_tokens_ids: Vec<usize> = vocab
+        .tokenize(input_text, true)
+        .unwrap()
+        .into_iter()
+        .map(|(_, id)| id.try_into().unwrap())
+        .collect();
 
-    println!("Testing token printing");
-    let mut token_print_buffer = TokenUtf8Buffer::new();
-    for &(token_bytes, _) in input_tokens.iter() {
-        if let Some(valid_str) = token_print_buffer.push(&token_bytes) {
-            print!("{}", valid_str);
+    let mut last_token_id = input_tokens_ids.first().unwrap().clone();
+    let mut print_buffer = TokenUtf8Buffer::new();
+    for i_context in 0..model.n_context {
+        let input_token_id = if i_context < input_tokens_ids.len() {
+            input_tokens_ids[i_context].clone()
+        } else {
+            last_token_id
+        };
+
+        if let Some(s) = print_buffer.push(vocab.token(input_token_id)) {
+            print!("{}", s);
+            io::stdout().flush().unwrap();
         }
+
+        let hidden_in = vocab_embeddings.get_embedding(input_token_id.try_into().unwrap());
+        let final_out = model.predict(&hidden_in);
+        let token_id = final_out
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+        last_token_id = token_id;
     }
     println!();
 }

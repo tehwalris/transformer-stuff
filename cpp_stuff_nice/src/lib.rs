@@ -19,6 +19,14 @@ impl SimpleLlamaModelLoader {
     pub fn n_layers(&self) -> u32 {
         unsafe { (*self.0.get_hparams()).n_layer }
     }
+
+    pub fn n_vocab(&self) -> u32 {
+        unsafe { (*self.0.get_hparams()).n_vocab }
+    }
+
+    pub fn n_context(&self) -> u32 {
+        unsafe { (*self.0.get_hparams()).n_ctx }
+    }
 }
 
 impl Drop for SimpleLlamaModelLoader {
@@ -31,12 +39,12 @@ pub struct SimpleTransformerLayer(*mut cml_SimpleTransformerLayer);
 
 impl SimpleTransformerLayer {
     pub fn forward(&mut self, hidden_in: &[f32], hidden_out: &mut [f32]) {
-        assert!(hidden_in.len() == hidden_out.len());
         unsafe {
             cml_simple_transformer_layer_forward(
                 self.0,
                 hidden_in.len().try_into().unwrap(),
                 hidden_in.as_ptr(),
+                hidden_out.len().try_into().unwrap(),
                 hidden_out.as_mut_ptr(),
             )
         }

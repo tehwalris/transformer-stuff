@@ -417,9 +417,10 @@ namespace cml
         cudaFree(weights.ff_norm);
       }
 
-      virtual void forward(int n, const float *hidden_in, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
       {
-        assert(uint32_t(n) == params.n_hidden);
+        assert(uint32_t(n_in) == params.n_hidden);
+        assert(uint32_t(n_out) == params.n_hidden);
         assert(state.new_i < params.n_context);
 
         const dim3 block_size_mul_n_hidden(32, 8);
@@ -451,7 +452,7 @@ namespace cml
                                            ceil_div<uint32_t>(params.n_heads, block_size_attention_sum.y));
 
         // Copy to GPU
-        thrust::copy(hidden_in, hidden_in + n, temp.hidden_in.begin());
+        thrust::copy(hidden_in, hidden_in + params.n_hidden, temp.hidden_in.begin());
 
         // Zero accumulators
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
