@@ -1,7 +1,8 @@
 #![feature(iter_array_chunks)]
 
 use std::{
-    io::{self, BufRead, Seek, Write},
+    fs::File,
+    io::{self, BufRead, BufWriter, Seek, Write},
     path::Path,
     thread,
 };
@@ -12,6 +13,8 @@ use half::{f16, slice::HalfFloatSliceExt};
 use indicatif::ProgressBar;
 use llm_base::{TokenUtf8Buffer, Vocabulary};
 use rayon::prelude::*;
+use tracing::span;
+use tracing_subscriber::prelude::*;
 
 enum Backend {
     Baseline,
@@ -71,6 +74,8 @@ impl Model {
             .par_iter()
             .enumerate()
             .map(|(i_layer, backend)| {
+                let span = span!(tracing::Level::INFO, "load_layer", i_layer);
+                let _enter = span.enter();
                 let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
                 let layer = backend.create_llama_layer(&mut loader, i_layer);
                 progress_bar.inc(1);
@@ -95,14 +100,24 @@ impl Model {
         let mut hidden_in = hidden_in.to_vec();
         let mut hidden_out = vec![0.0; self.n_hidden];
 
-        for layer in &mut self.layers {
+        for (i_layer, layer) in self.layers.iter_mut().enumerate() {
             hidden_out.fill(0.0);
-            layer.forward(&mut hidden_in, &mut hidden_out);
+
+            {
+                let span = span!(tracing::Level::INFO, "layer_forward", i_layer);
+                let _enter = span.enter();
+                layer.forward(&mut hidden_in, &mut hidden_out);
+            }
+
             std::mem::swap(&mut hidden_in, &mut hidden_out);
         }
 
         let mut final_out = vec![0.0; self.n_vocab];
-        self.final_layer.forward(&mut hidden_in, &mut final_out);
+        {
+            let span = span!(tracing::Level::INFO, "final_layer_forward");
+            let _enter = span.enter();
+            self.final_layer.forward(&mut hidden_in, &mut final_out);
+        }
 
         final_out
     }
@@ -185,6 +200,13 @@ fn main() {
     }
     let model_path = &args[1];
 
+    let trace_writer = BufWriter::new(File::create("trace.json").unwrap());
+    let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
+        .writer(trace_writer)
+        .include_args(true)
+        .build();
+    tracing_subscriber::registry().with(chrome_layer).init();
+
     let mut layer_backends = vec![];
     for _ in 0..16 {
         layer_backends.push(Backend::Cuda);
@@ -208,6 +230,13 @@ fn main() {
     let mut last_token_id = input_tokens_ids.first().unwrap().clone();
     let mut print_buffer = TokenUtf8Buffer::new();
     for i_context in 0..model.n_context {
+        let span = span!(tracing::Level::INFO, "token processing", i_context);
+        let _enter = span.enter();
+
+        if i_context % 10 == 0 {
+            guard.flush();
+        }
+
         let input_token_id = if i_context < input_tokens_ids.len() {
             input_tokens_ids[i_context].clone()
         } else {
@@ -230,4 +259,6 @@ fn main() {
         last_token_id = token_id;
     }
     println!();
+
+    guard.flush();
 }
