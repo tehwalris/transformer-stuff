@@ -11,8 +11,6 @@ use ggml::format::TensorLoadInfo;
 use half::f16;
 use indicatif::ProgressBar;
 use llm_base::{TokenUtf8Buffer, Vocabulary};
-use rand::Rng;
-use rand_distr::StandardNormal;
 use rayon::prelude::*;
 
 enum Backend {
@@ -86,47 +84,6 @@ impl Model {
     }
 }
 
-fn do_thing(model_path: &str) {
-    let mut rng = rand::thread_rng();
-
-    let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(model_path);
-    let n_hidden = usize::try_from(loader.n_hidden()).unwrap();
-
-    let mut baseline_model = cpp_stuff_nice::baseline::create_llama_layer(&mut loader, 0);
-    let mut cuda_model = cpp_stuff_nice::cuda::create_llama_layer(&mut loader, 0);
-    let mut hip_model = cpp_stuff_nice::hip::create_llama_layer(&mut loader, 0);
-    drop(loader);
-
-    let hidden_in: Vec<f32> = (0..n_hidden)
-        .map(|_| rng.sample(StandardNormal))
-        .collect::<Vec<_>>();
-    let mut hidden_out: Vec<f32> = vec![0.0; n_hidden];
-
-    baseline_model.forward(&hidden_in, &mut hidden_out);
-    let hidden_out_baseline = hidden_out.clone();
-
-    cuda_model.forward(&hidden_in, &mut hidden_out);
-    let hidden_out_cuda = hidden_out.clone();
-
-    hip_model.forward(&hidden_in, &mut hidden_out);
-    let hidden_out_hip = hidden_out.clone();
-
-    for i_hidden in [0, 1, n_hidden - 2, n_hidden - 1].into_iter() {
-        println!(
-            "hidden_out_baseline[{}] = {}",
-            i_hidden, hidden_out_baseline[i_hidden]
-        );
-        println!(
-            "hidden_out_cuda[{}] = {}",
-            i_hidden, hidden_out_cuda[i_hidden]
-        );
-        println!(
-            "hidden_out_hip[{}] = {}",
-            i_hidden, hidden_out_hip[i_hidden]
-        );
-    }
-}
-
 struct VocabEmbeddings {
     n_hidden: usize,
     n_vocab: usize,
@@ -195,16 +152,17 @@ fn main() {
     }
     let model_path = &args[1];
 
-    println!("Loading vocab");
+    let mut layer_backends = vec![];
+    for _ in 0..16 {
+        layer_backends.push(Backend::Cuda);
+    }
+    for _ in 0..16 {
+        layer_backends.push(Backend::Hip);
+    }
+
+    println!("Loading model...");
     let (vocab, vocab_embeddings) = load_vocab(model_path);
-    println!("Done loading vocab");
-    let token_id = 123;
-    println!(
-        "Embedding of token \"{}\" ({}) starts with {:?}",
-        String::from_utf8(vocab.token(token_id).to_vec()).unwrap(),
-        token_id,
-        &vocab_embeddings.get_embedding(token_id)[..10]
-    );
+    let model = Model::load(model_path, &layer_backends, true);
 
     let input_text = "This is a test";
     let input_tokens = vocab.tokenize(input_text, true).unwrap();
@@ -217,20 +175,4 @@ fn main() {
         }
     }
     println!();
-
-    let mut layer_backends = vec![];
-    for _ in 0..16 {
-        layer_backends.push(Backend::Cuda);
-    }
-    for _ in 0..16 {
-        layer_backends.push(Backend::Hip);
-    }
-
-    println!("Loading model");
-    let model = Model::load(model_path, &layer_backends, true);
-    println!("Done loading model");
-
-    println!("Doing thing");
-    do_thing(model_path);
-    println!("Done doing thing")
 }
