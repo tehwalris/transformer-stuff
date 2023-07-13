@@ -89,6 +89,10 @@ pub mod cuda {
     ) -> SimpleTransformerLayer {
         unsafe { SimpleTransformerLayer(cml_cuda_create_llama_layer(&mut loader.0, layer_index)) }
     }
+
+    pub fn create_llama_final_layer(loader: &mut SimpleLlamaModelLoader) -> SimpleTransformerLayer {
+        unsafe { SimpleTransformerLayer(cml_cuda_create_llama_final_layer(&mut loader.0)) }
+    }
 }
 
 pub mod hip {

@@ -225,6 +225,7 @@ namespace cml
 
       QuantizedMatrix(uint32_t n, uint32_t m) : n(n), m(m)
       {
+        assert(m % 4 == 0);
         CUDA_CHECK(cudaMallocManaged(&data, n * (m / 4) * sizeof(char4)));
         CUDA_CHECK(cudaMallocManaged(&scale, n * sizeof(float)));
       }
@@ -353,8 +354,6 @@ namespace cml
         {
           std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
 
-          assert(m % 4 == 0);
-
           QuantizedMatrix q(n, m);
 
           q.fill_from_unquantized(loader->get_tensor_float(name, {n, m}));
@@ -413,8 +412,8 @@ namespace cml
 
       virtual ~LlamaLayer()
       {
-        cudaFree(weights.attention_norm);
-        cudaFree(weights.ff_norm);
+        CUDA_CHECK(cudaFree(weights.attention_norm));
+        CUDA_CHECK(cudaFree(weights.ff_norm));
       }
 
       virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
@@ -431,9 +430,6 @@ namespace cml
 
         const int block_size_scale(256);
         const int grid_size_scale(ceil_div<uint32_t>(params.n_hidden, block_size_scale));
-
-        const int block_size_quantize(256);
-        const int grid_size_quantize(ceil_div<uint32_t>(params.n_hidden, block_size_quantize));
 
         const dim3 block_size_rope(64, 1);
         const dim3 grid_size_rope(ceil_div<uint32_t>(params.n_hidden / params.n_heads / 2, block_size_rope.x), params.n_heads);
@@ -540,11 +536,95 @@ namespace cml
       State state;
     };
 
+    class LlamaFinalLayer : public SimpleTransformerLayer
+    {
+    public:
+      LlamaFinalLayer(SimpleLlamaModelLoader *loader)
+      {
+        llama_hparams *hparams = loader->get_hparams();
+        n_hidden = hparams->n_embd;
+        n_vocab = hparams->n_vocab;
+
+        assert(n_hidden % 4 == 0);
+
+        CUDA_CHECK(cudaMallocManaged(&weights_model_norm, n_hidden * sizeof(float)));
+        float *data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
+        memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
+
+        weights_output_layer = QuantizedMatrix(n_vocab, n_hidden);
+        weights_output_layer.fill_from_unquantized(loader->get_tensor_float("output.weight", {n_vocab, n_hidden}));
+
+        temp_hidden_in.resize(n_hidden);
+        temp_hidden_out.resize(n_vocab);
+        temp_model_norm.resize(n_hidden);
+        temp_model_norm_quantized.resize(n_hidden);
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+      }
+
+      LlamaFinalLayer(const LlamaFinalLayer &) = delete;
+
+      virtual ~LlamaFinalLayer()
+      {
+        CUDA_CHECK(cudaFree(weights_model_norm));
+      }
+
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
+      {
+        assert(uint32_t(n_in) == n_hidden);
+        assert(uint32_t(n_out) == n_vocab);
+
+        const dim3 block_size_mul_n_vocab(32, 8);
+        const dim3 grid_size_mul_n_vocab(1, ceil_div<uint32_t>(n_vocab, block_size_mul_n_vocab.y));
+
+        const int block_size_scale(256);
+        const int grid_size_scale(ceil_div<uint32_t>(n_hidden, block_size_scale));
+
+        // Copy to GPU
+        thrust::copy(hidden_in, hidden_in + n_hidden, temp_hidden_in.begin());
+
+        // Zero accumulators
+        thrust::fill(temp_hidden_out.begin(), temp_hidden_out.end(), 0.0f);
+
+        // Norm before output layer
+        rms_norm_gpu_full(temp_hidden_in, temp_model_norm, thrust::device_ptr<float>(weights_model_norm));
+
+        // Output layer
+        float unquantize_scale = quantize_gpu_full(temp_model_norm, temp_model_norm_quantized);
+        mul_gpu<<<grid_size_mul_n_vocab, block_size_mul_n_vocab>>>(n_vocab, n_hidden, weights_output_layer.data, temp_model_norm_quantized.data().get(), temp_hidden_out.data().get());
+        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(n_vocab, temp_hidden_out.data().get(), weights_output_layer.scale, unquantize_scale);
+
+        // Copy from GPU
+        thrust::copy(temp_hidden_out.begin(), temp_hidden_out.end(), hidden_out);
+      }
+
+      virtual void reset() override
+      {
+      }
+
+    private:
+      uint32_t n_hidden;
+      uint32_t n_vocab;
+      thrust::device_vector<float> temp_hidden_in;
+      thrust::device_vector<float> temp_hidden_out;
+      thrust::device_vector<float> temp_model_norm;
+      thrust::device_vector<char4> temp_model_norm_quantized;
+      float *weights_model_norm;
+      QuantizedMatrix weights_output_layer;
+    };
+
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
     create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
     {
       return new LlamaLayer(loader, layer_index);
+    }
+
+    __attribute__((visibility("default")))
+    SimpleTransformerLayer *
+    create_llama_final_layer(SimpleLlamaModelLoader *loader)
+    {
+      return new LlamaFinalLayer(loader);
     }
   };
 };
