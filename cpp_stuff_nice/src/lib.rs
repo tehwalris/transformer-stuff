@@ -38,7 +38,7 @@ impl Drop for SimpleLlamaModelLoader {
 pub struct SimpleTransformerLayer(*mut cml_SimpleTransformerLayer);
 
 impl SimpleTransformerLayer {
-    pub fn forward(&mut self, hidden_in: &[f32], hidden_out: &mut [f32]) {
+    pub fn forward(&mut self, hidden_in: &[f32], hidden_out: &mut [f32], path: &[u32]) {
         unsafe {
             cml_simple_transformer_layer_forward(
                 self.0,
@@ -46,8 +46,14 @@ impl SimpleTransformerLayer {
                 hidden_in.as_ptr(),
                 hidden_out.len().try_into().unwrap(),
                 hidden_out.as_mut_ptr(),
+                path.len().try_into().unwrap(),
+                path.as_ptr(),
             )
         }
+    }
+
+    pub fn next_i(&self) -> u32 {
+        unsafe { cml_simple_transformer_layer_next_i(self.0) }
     }
 
     pub fn reset(&mut self) {

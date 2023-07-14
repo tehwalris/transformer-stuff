@@ -416,11 +416,21 @@ namespace cml
         CUDA_CHECK(cudaFree(weights.ff_norm));
       }
 
-      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
         assert(state.new_i < params.n_context);
+        assert(n_path > 0);
+        assert(n_path <= state.new_i + 1);
+        assert(path[n_path - 1] == state.new_i);
+
+        // TODO non-linear paths are not supported yet
+        assert(n_path == state.new_i + 1);
+        for (int i = 0; i < n_path; i++)
+        {
+          assert(path[i] == i);
+        }
 
         const dim3 block_size_mul_n_hidden(32, 8);
         const dim3 grid_size_mul_n_hidden(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul_n_hidden.y));
@@ -524,6 +534,11 @@ namespace cml
         state.new_i++;
       }
 
+      virtual uint32_t next_i() const override
+      {
+        return state.new_i;
+      }
+
       virtual void reset() override
       {
         state.new_i = 0;
@@ -569,10 +584,13 @@ namespace cml
         CUDA_CHECK(cudaFree(weights_model_norm));
       }
 
-      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
         assert(uint32_t(n_in) == n_hidden);
         assert(uint32_t(n_out) == n_vocab);
+        assert(n_path > 0);
+        assert(n_path <= new_i + 1);
+        assert(path[n_path - 1] == new_i);
 
         const dim3 block_size_mul_n_vocab(32, 8);
         const dim3 grid_size_mul_n_vocab(1, ceil_div<uint32_t>(n_vocab, block_size_mul_n_vocab.y));
@@ -596,15 +614,24 @@ namespace cml
 
         // Copy from GPU
         thrust::copy(temp_hidden_out.begin(), temp_hidden_out.end(), hidden_out);
+
+        new_i++;
+      }
+
+      virtual uint32_t next_i() const override
+      {
+        return new_i;
       }
 
       virtual void reset() override
       {
+        new_i = 0;
       }
 
     private:
       uint32_t n_hidden;
       uint32_t n_vocab;
+      uint32_t new_i;
       thrust::device_vector<float> temp_hidden_in;
       thrust::device_vector<float> temp_hidden_out;
       thrust::device_vector<float> temp_model_norm;

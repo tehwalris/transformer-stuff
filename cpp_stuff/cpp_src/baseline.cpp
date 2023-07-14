@@ -286,14 +286,13 @@ namespace cml
         free(state.cache_v);
       }
 
-      virtual uint32_t forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
         assert(state.new_i < params.n_context);
         assert(n_path > 0);
         assert(n_path <= state.new_i + 1);
-
         assert(path[n_path - 1] == state.new_i);
 
         // Norm before attention
@@ -350,7 +349,12 @@ namespace cml
           hidden_out[i] = temp.l2[i] + temp.o[i];
         }
 
-        return state.new_i++;
+        state.new_i++;
+      }
+
+      virtual uint32_t next_i() const override
+      {
+        return state.new_i;
       }
 
       virtual void reset() override
@@ -396,10 +400,13 @@ namespace cml
         free(weights_output_layer);
       }
 
-      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
+      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
         assert(uint32_t(n_in) == n_hidden);
         assert(uint32_t(n_out) == n_vocab);
+        assert(n_path > 0);
+        assert(n_path <= new_i + 1);
+        assert(path[n_path - 1] == new_i);
 
         // Norm before output layer
         rms_norm(n_hidden, hidden_in, temp_model_norm);
@@ -410,15 +417,24 @@ namespace cml
 
         // Output layer
         matrix_vector_multiply(n_vocab, n_hidden, weights_output_layer, temp_model_norm, hidden_out);
+
+        new_i++;
+      }
+
+      virtual uint32_t next_i() const override
+      {
+        return new_i;
       }
 
       virtual void reset() override
       {
+        new_i = 0;
       }
 
     private:
       uint32_t n_hidden;
       uint32_t n_vocab;
+      uint32_t new_i;
       float *temp_model_norm;
       float *weights_model_norm;
       float *weights_output_layer;

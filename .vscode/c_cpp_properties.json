@@ -11,7 +11,8 @@
                 "__CUDA_ARCH__=610",
                 "__HIP_PLATFORM_AMD__",
                 "__clang__",
-                "__HIP__"
+                "__HIP__",
+                "_OPENMP=1"
             ],
             "compilerPath": "/nix/store/1i2jj3n47dhzpi6z63jv7sbabnc4wk0v-rocm-llvm-clang-wrapper-5.4.4/bin/clang",
             "cStandard": "gnu17",

@@ -94,8 +94,11 @@ impl Model {
         }
     }
 
-    fn predict(&mut self, hidden_in: &[f32]) -> Vec<f32> {
+    fn predict(&mut self, hidden_in: &[f32], path: &[u32]) -> Vec<f32> {
         assert_eq!(hidden_in.len(), self.n_hidden);
+        assert!(path.len() > 0);
+        assert!(path.len() <= self.n_context);
+        assert!(*path.last().unwrap() == self.next_i());
 
         let mut hidden_in = hidden_in.to_vec();
         let mut hidden_out = vec![0.0; self.n_hidden];
@@ -106,7 +109,7 @@ impl Model {
             {
                 let span = span!(tracing::Level::INFO, "layer_forward", i_layer);
                 let _enter = span.enter();
-                layer.forward(&mut hidden_in, &mut hidden_out);
+                layer.forward(&mut hidden_in, &mut hidden_out, path);
             }
 
             std::mem::swap(&mut hidden_in, &mut hidden_out);
@@ -116,10 +119,15 @@ impl Model {
         {
             let span = span!(tracing::Level::INFO, "final_layer_forward");
             let _enter = span.enter();
-            self.final_layer.forward(&mut hidden_in, &mut final_out);
+            self.final_layer
+                .forward(&mut hidden_in, &mut final_out, path);
         }
 
         final_out
+    }
+
+    fn next_i(&self) -> u32 {
+        self.layers.first().unwrap().next_i()
     }
 
     fn reset(&mut self) {
@@ -218,6 +226,7 @@ fn main() {
     println!("Loading model...");
     let (vocab, vocab_embeddings) = load_vocab(model_path);
     let mut model = Model::load(model_path, &layer_backends, true);
+    let mut prediction_path = vec![];
 
     let input_text = "5 JavaScript edge cases that broke prod\n";
     let input_tokens_ids: Vec<usize> = vocab
@@ -249,7 +258,8 @@ fn main() {
         }
 
         let hidden_in = vocab_embeddings.get_embedding(input_token_id.try_into().unwrap());
-        let final_out = model.predict(&hidden_in);
+        prediction_path.push(model.next_i());
+        let final_out = model.predict(&hidden_in, &prediction_path);
         let token_id = final_out
             .iter()
             .enumerate()
@@ -284,8 +294,12 @@ mod tests {
         let mut final_out_baseline = vec![0.0; n_vocab];
         let mut final_out_cuda = vec![0.0; n_vocab];
 
-        baseline_layer.forward(&hidden_in, &mut final_out_baseline);
-        cuda_layer.forward(&hidden_in, &mut final_out_cuda);
+        baseline_layer.forward(
+            &hidden_in,
+            &mut final_out_baseline,
+            &[baseline_layer.next_i()],
+        );
+        cuda_layer.forward(&hidden_in, &mut final_out_cuda, &[cuda_layer.next_i()]);
 
         let tolerance = 0.1;
         let mut all_close_enough = true;
