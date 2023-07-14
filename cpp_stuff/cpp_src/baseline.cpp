@@ -54,20 +54,20 @@ namespace cml
       }
     }
 
-    void apply_rope(const Hyperparams &params, uint32_t new_i, float *vec)
+    void apply_rope(const Hyperparams &params, uint32_t position, float *vec)
     {
       assert(params.n_hidden % params.n_heads == 0);
       assert((params.n_hidden / params.n_heads) % 2 == 0);
 
       float theta_scale = powf(10000.0, -2.0f / (float(params.n_hidden) / float(params.n_heads)));
 
-      float theta = float(new_i);
+      float theta = float(position);
       for (uint32_t i = 0; i < params.n_hidden; i += 2)
       {
         if (i % (params.n_hidden / params.n_heads) == 0)
         {
           // RoPE is applied separately to each head
-          theta = float(new_i);
+          theta = float(position);
         }
 
         float cos_theta = std::cos(theta);
@@ -104,6 +104,7 @@ namespace cml
     }
 
     void attention(const Hyperparams &params,
+                   uint32_t n_path, const uint32_t *path,
                    uint32_t new_i, float *new_q, float *new_k, float *new_v,
                    float *cache_k, float *cache_v,
                    float *temp_dot_product,
@@ -118,18 +119,19 @@ namespace cml
 
       // Calculate the dot product with each cached K (per head)
       const float dot_product_scale = 1.0f / std::sqrt(float(params.n_hidden / params.n_heads));
-      for (uint32_t i_context = 0; i_context <= new_i; i_context++)
+      for (uint32_t i_path = 0; i_path < n_path; i_path++)
       {
+        uint32_t i_context = path[i_path];
         for (uint32_t i_head = 0; i_head < params.n_heads; i_head++)
         {
           uint32_t head_offset = i_head * (params.n_hidden / params.n_heads);
-          temp_dot_product[i_head * params.n_context + i_context] = dot_product_scale * vector_dot_product(params.n_hidden / params.n_heads, &new_q[head_offset], &cache_k[i_context * params.n_hidden + head_offset]);
+          temp_dot_product[i_head * params.n_context + i_path] = dot_product_scale * vector_dot_product(params.n_hidden / params.n_heads, &new_q[head_offset], &cache_k[i_context * params.n_hidden + head_offset]);
         }
       }
 
       for (uint32_t i_head = 0; i_head < params.n_heads; i_head++)
       {
-        softmax(new_i + 1, &temp_dot_product[i_head * params.n_context]);
+        softmax(n_path, &temp_dot_product[i_head * params.n_context]);
       }
 
       // Calculate the weighted sum of the cached V
@@ -137,11 +139,12 @@ namespace cml
       {
         out[i] = 0.0f;
       }
-      for (uint32_t i_context = 0; i_context <= new_i; i_context++)
+      for (uint32_t i_path = 0; i_path < n_path; i_path++)
       {
+        uint32_t i_context = path[i_path];
         for (uint32_t i_head = 0; i_head < params.n_heads; i_head++)
         {
-          float weight = temp_dot_product[i_head * params.n_context + i_context];
+          float weight = temp_dot_product[i_head * params.n_context + i_path];
           for (uint32_t i_hidden = 0; i_hidden < params.n_hidden / params.n_heads; i_hidden++)
           {
             uint32_t offset = i_head * (params.n_hidden / params.n_heads) + i_hidden;
@@ -283,11 +286,15 @@ namespace cml
         free(state.cache_v);
       }
 
-      virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out) override
+      virtual uint32_t forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
         assert(state.new_i < params.n_context);
+        assert(n_path > 0);
+        assert(n_path <= state.new_i + 1);
+
+        assert(path[n_path - 1] == state.new_i);
 
         // Norm before attention
         rms_norm(params.n_hidden, hidden_in, temp.norm_residual);
@@ -302,11 +309,12 @@ namespace cml
         matrix_vector_multiply(params.n_hidden, params.n_hidden, weights.v, temp.norm_residual, temp.v);
 
         // Apply RoPE
-        apply_rope(params, state.new_i, temp.q);
-        apply_rope(params, state.new_i, temp.k);
+        apply_rope(params, n_path - 1, temp.q);
+        apply_rope(params, n_path - 1, temp.k);
 
         // Attention
         attention(params,
+                  n_path, path,
                   state.new_i, temp.q, temp.k, temp.v,
                   state.cache_k, state.cache_v,
                   temp.dot_product,
@@ -342,7 +350,7 @@ namespace cml
           hidden_out[i] = temp.l2[i] + temp.o[i];
         }
 
-        state.new_i++;
+        return state.new_i++;
       }
 
       virtual void reset() override
