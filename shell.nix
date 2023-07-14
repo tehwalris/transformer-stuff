@@ -1,5 +1,5 @@
 let
-  fenix_overlay = import "${builtins.fetchTarball "https://github.com/nix-community/fenix/archive/main.tar.gz"}/overlay.nix";
+  fenix_overlay = import "${builtins.fetchTarball "https://github.com/nix-community/fenix/archive/60e7c7a1e31e300658a2b1974853a3121bd2298e.tar.gz"}/overlay.nix";
   pkgs = import <nixpkgs> { overlays = [ fenix_overlay ]; };
 in
   pkgs.mkShell {
