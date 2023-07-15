@@ -28,7 +28,7 @@ pkgs.mkShell
     xorg.libxcb
   ];
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
-    "/run/opengl-driver/lib"
+    "/run/opengl-driver"
     xorg.libX11
     xorg.libXcursor
     xorg.libXrandr
