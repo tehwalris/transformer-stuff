@@ -1,6 +1,7 @@
 #![feature(iter_array_chunks)]
 
 mod model;
+mod ui;
 mod vocab;
 
 use std::{
@@ -21,6 +22,8 @@ fn main() {
         return;
     }
     let model_path = &args[1];
+
+    nannou::app(ui::model).update(ui::update).run();
 
     let trace_writer = BufWriter::new(File::create("trace.json").unwrap());
     let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
