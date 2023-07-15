@@ -1,4 +1,7 @@
-use std::io::{BufRead, Seek};
+use std::{
+    io::{BufRead, Seek},
+    path::Path,
+};
 
 use ggml::format::TensorLoadInfo;
 use half::{f16, slice::HalfFloatSliceExt};
@@ -45,9 +48,9 @@ impl VocabEmbeddings {
     }
 }
 
-pub fn load_vocab(model_path: &str) -> (Vocabulary, VocabEmbeddings) {
+pub fn load_vocab(model_path: impl AsRef<Path>) -> (Vocabulary, VocabEmbeddings) {
     let mut loader = llm_base::Loader::<llm_llama::Hyperparameters, _>::new(|_| {});
-    let mut file = std::io::BufReader::new(std::fs::File::open(model_path).unwrap());
+    let mut file = std::io::BufReader::new(std::fs::File::open(&model_path).unwrap());
     ggml::format::load(&mut file, &mut loader).unwrap();
 
     let n_hidden = loader.hyperparameters.n_embd;
