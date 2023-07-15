@@ -148,7 +148,9 @@ impl UIModel {
             self.cursor.y -= speed.y;
         }
         // HACK prevent zooming in extremely before entering a child
-        self.cursor.x = self.cursor.x.clamp(0.0, 0.9999);
+        if self.cursor.x > 0.9999 {
+            self.cursor.x = 0.9999;
+        }
 
         self.cursor.normalize(&inference_tree);
         *self.focused_path.lock().unwrap() = self.cursor.path.clone();
