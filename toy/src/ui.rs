@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use llm_base::TokenId;
-use nannou::prelude::*;
+use nannou::{event::ElementState, prelude::*};
 
 use crate::tree::InferenceTree;
 
@@ -23,18 +23,7 @@ impl Cursor {
 
     fn normalize(&mut self, inference_tree: &InferenceTree) {
         // Discover all the nodes from the root to the node at `path`.
-        let mut nodes_from_root = vec![];
-        {
-            let mut node = inference_tree.root();
-            nodes_from_root.push(node);
-            for &token_id in &self.path[1..] {
-                node = match node.get_child(token_id) {
-                    Some(child) => child,
-                    None => break,
-                };
-                nodes_from_root.push(node);
-            }
-        }
+        let mut nodes_from_root = inference_tree.get_nodes_on_path(&self.path);
         assert!(nodes_from_root.len() == self.path.len());
         assert!(nodes_from_root.len() > 0);
 
@@ -120,6 +109,9 @@ pub struct UIModel {
     inference_tree: Arc<Mutex<InferenceTree>>,
     focused_path: Arc<Mutex<Vec<TokenId>>>,
     cursor: Cursor,
+    moving: bool,
+    speed: f32,
+    steering: Vec2,
 }
 
 impl UIModel {
@@ -134,19 +126,107 @@ impl UIModel {
             inference_tree,
             focused_path,
             cursor,
+            moving: false,
+            speed: 1.0,
+            steering: Vec2::default(),
         }
     }
 
-    pub fn update(&mut self, _app: &App, _update: Update) {
+    pub fn update(&mut self, app: &App, update: Update) {
         let inference_tree = self.inference_tree.lock().unwrap();
+
+        let window_rect = app.window_rect();
+        let right_half_width = window_rect.w() / 3.0;
+
+        self.steering = (app.mouse.position()).clamp_length_max(right_half_width);
+        let speed = self.steering / right_half_width * self.speed * update.since_last.secs() as f32;
+        if self.moving {
+            self.cursor.x += speed.x;
+            self.cursor.y -= speed.y;
+        }
+        // HACK prevent zooming in extremely before entering a child
+        self.cursor.x = self.cursor.x.clamp(0.0, 0.99);
+
         self.cursor.normalize(&inference_tree);
         *self.focused_path.lock().unwrap() = self.cursor.path.clone();
     }
+
+    pub fn event(&mut self, _app: &App, event: Event) {
+        match event {
+            Event::WindowEvent {
+                id: _,
+                simple: Some(WindowEvent::MousePressed(MouseButton::Left)),
+            } => {
+                self.moving = !self.moving;
+            }
+            _ => {}
+        }
+    }
 }
 
-fn view(app: &App, _model: &UIModel, frame: Frame) {
+struct DisplayInterval {
+    start: f32,
+    end: f32,
+    depth: usize,
+}
+
+fn intervals_from_tree(
+    inference_tree: &InferenceTree,
+    cursor: &Cursor,
+    window_height: f32,
+    right_half_width: f32,
+) -> Vec<DisplayInterval> {
+    let size = (right_half_width / (1.0 - cursor.x)).round();
+    let start = (-cursor.y * size).round();
+    vec![DisplayInterval {
+        start,
+        end: start + size,
+        depth: cursor.path.len(),
+    }]
+}
+
+fn view(app: &App, model: &UIModel, frame: Frame) {
     let draw = app.draw();
-    draw.background().color(PLUM);
-    draw.ellipse().color(STEELBLUE);
+    let window_rect = app.window_rect();
+
+    draw.background().color(BLACK);
+
+    let right_half_width = window_rect.w() / 3.0;
+    let intervals = intervals_from_tree(
+        &model.inference_tree.lock().unwrap(),
+        &model.cursor,
+        window_rect.h(),
+        right_half_width,
+    );
+    for DisplayInterval { start, end, .. } in intervals {
+        let size = end - start;
+        let rect = Rect::from_x_y_w_h(
+            right_half_width - 0.5 * size,
+            -0.5 * (start + end),
+            size,
+            size,
+        );
+        if let Some(rect) = rect.overlap(window_rect) {
+            draw.rect().xy(rect.xy()).wh(rect.wh()).color(GREEN);
+        }
+    }
+
+    // Horizontal and vertical guide lines
+    draw.line()
+        .start(pt2(-0.5 * window_rect.w(), 0.0))
+        .end(pt2(0.5 * window_rect.w(), 0.0))
+        .color(WHITE);
+    draw.line()
+        .start(pt2(0.0, -0.5 * window_rect.h()))
+        .end(pt2(0.0, 0.5 * window_rect.h()))
+        .color(WHITE);
+
+    // Steering indicator
+    draw.line().end(model.steering).color(WHITE);
+    draw.ellipse()
+        .xy(model.steering)
+        .radius(5.0)
+        .color(if model.moving { WHITE } else { BLACK });
+
     draw.to_frame(app, &frame).unwrap();
 }

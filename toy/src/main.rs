@@ -48,6 +48,7 @@ fn main() {
         Box::new(async { ui::UIModel::new(app, inference_tree, focused_path) })
     })
     .update(|app, model, update| model.update(app, update))
+    .event(|app, model, event| model.event(app, event))
     .run();
 
     guard.flush();
