@@ -55,12 +55,21 @@ fn try_predict_next(
     let hidden_in = vocab_embeddings.get_embedding(final_node_clone.token_id.try_into().unwrap());
     let final_out = model.predict(&hidden_in, &prediction_path);
 
-    let children = final_out
+    let mut probabilities: Vec<f32> = final_out
         .iter()
+        .map(|&log_probability| log_probability.exp())
+        .collect();
+    let sum_of_probabilities: f32 = probabilities.iter().sum();
+    for probability in probabilities.iter_mut() {
+        *probability /= sum_of_probabilities;
+    }
+
+    let children = probabilities
+        .into_iter()
         .enumerate()
-        .map(|(i, &probability)| InferenceTreeNode {
+        .map(|(i, probability)| InferenceTreeNode {
             token_id: TokenId::try_from(i).unwrap(),
-            probability,
+            probability: probability,
             prediction_id: None,
             children: None,
         })

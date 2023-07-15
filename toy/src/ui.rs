@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use llm_base::TokenId;
 use nannou::{event::ElementState, prelude::*};
 
-use crate::tree::InferenceTree;
+use crate::tree::{InferenceTree, InferenceTreeNode};
 
 struct Cursor {
     path: Vec<TokenId>,
@@ -127,7 +127,7 @@ impl UIModel {
             focused_path,
             cursor,
             moving: false,
-            speed: 1.0,
+            speed: 3.0,
             steering: Vec2::default(),
         }
     }
@@ -139,13 +139,16 @@ impl UIModel {
         let right_half_width = window_rect.w() / 3.0;
 
         self.steering = (app.mouse.position()).clamp_length_max(right_half_width);
-        let speed = self.steering / right_half_width * self.speed * update.since_last.secs() as f32;
+        let speed = self.steering / right_half_width
+            * (1.0 - self.cursor.x)
+            * self.speed
+            * update.since_last.secs() as f32;
         if self.moving {
             self.cursor.x += speed.x;
             self.cursor.y -= speed.y;
         }
         // HACK prevent zooming in extremely before entering a child
-        self.cursor.x = self.cursor.x.clamp(0.0, 0.99);
+        self.cursor.x = self.cursor.x.clamp(0.0, 0.9999);
 
         self.cursor.normalize(&inference_tree);
         *self.focused_path.lock().unwrap() = self.cursor.path.clone();
@@ -176,13 +179,53 @@ fn intervals_from_tree(
     window_height: f32,
     right_half_width: f32,
 ) -> Vec<DisplayInterval> {
-    let size = (right_half_width / (1.0 - cursor.x)).round();
-    let start = (-cursor.y * size).round();
-    vec![DisplayInterval {
-        start,
-        end: start + size,
-        depth: cursor.path.len(),
-    }]
+    let size = right_half_width / (1.0 - cursor.x);
+    let mut intervals = Vec::new();
+    intervals_from_node(
+        inference_tree.root(),
+        window_height,
+        size,
+        -cursor.y * size,
+        cursor.path.len(),
+        &mut intervals,
+    );
+    intervals
+}
+
+fn intervals_from_node(
+    node: &InferenceTreeNode,
+    window_height: f32,
+    size: f32,
+    start: f32,
+    depth: usize,
+    output: &mut Vec<DisplayInterval>,
+) {
+    if size < 1.0 {
+        return;
+    }
+
+    let end = start + size;
+    output.push(DisplayInterval { start, end, depth });
+
+    if let Some(children) = node.children.as_ref() {
+        let mut child_start = start;
+        for child in children {
+            let remaining_space = size - child_start;
+            if remaining_space < 1.0 {
+                break;
+            }
+            let child_size = child.probability * size;
+            intervals_from_node(
+                child,
+                window_height,
+                child_size,
+                child_start,
+                depth + 1,
+                output,
+            );
+            child_start += child_size;
+        }
+    }
 }
 
 fn view(app: &App, model: &UIModel, frame: Frame) {
@@ -198,7 +241,7 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
         window_rect.h(),
         right_half_width,
     );
-    for DisplayInterval { start, end, .. } in intervals {
+    for DisplayInterval { start, end, depth } in intervals {
         let size = end - start;
         let rect = Rect::from_x_y_w_h(
             right_half_width - 0.5 * size,
@@ -207,7 +250,10 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
             size,
         );
         if let Some(rect) = rect.overlap(window_rect) {
-            draw.rect().xy(rect.xy()).wh(rect.wh()).color(GREEN);
+            draw.rect()
+                .xy(rect.xy())
+                .wh(rect.wh())
+                .color(if depth % 2 == 0 { GREEN } else { BLUE });
         }
     }
 
