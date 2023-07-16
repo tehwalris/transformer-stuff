@@ -52,50 +52,6 @@ fn main() {
     .run();
 
     guard.flush();
-
-    // let input_text = "5 JavaScript edge cases that broke prod\n";
-    // let input_tokens_ids: Vec<usize> = vocab
-    //     .tokenize(input_text, true)
-    //     .unwrap()
-    //     .into_iter()
-    //     .map(|(_, id)| id.try_into().unwrap())
-    //     .collect();
-
-    // let mut last_token_id = input_tokens_ids.first().unwrap().clone();
-    // let mut print_buffer = TokenUtf8Buffer::new();
-    // for i_context in 0..model.n_context {
-    //     let span = span!(tracing::Level::INFO, "token processing", i_context);
-    //     let _enter = span.enter();
-
-    //     if i_context % 10 == 0 {
-    //         guard.flush();
-    //     }
-
-    //     let input_token_id = if i_context < input_tokens_ids.len() {
-    //         input_tokens_ids[i_context].clone()
-    //     } else {
-    //         last_token_id
-    //     };
-
-    //     if let Some(s) = print_buffer.push(vocab.token(input_token_id)) {
-    //         print!("{}", s);
-    //         io::stdout().flush().unwrap();
-    //     }
-
-    //     let hidden_in = vocab_embeddings.get_embedding(input_token_id.try_into().unwrap());
-    //     prediction_path.push(model.next_i());
-    //     let final_out = model.predict(&hidden_in, &prediction_path);
-    //     let token_id = final_out
-    //         .iter()
-    //         .enumerate()
-    //         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-    //         .unwrap()
-    //         .0;
-    //     last_token_id = token_id;
-    // }
-    // println!();
-
-    // guard.flush();
 }
 
 #[cfg(test)]
