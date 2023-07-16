@@ -117,7 +117,7 @@ impl UIModel {
             focused_path,
             cursor,
             moving: false,
-            speed: 3.0,
+            speed: 5.0,
             steering: Vec2::default(),
         }
     }
@@ -165,24 +165,75 @@ struct DisplayInterval<'a> {
 fn intervals_from_tree<'a>(
     inference_tree: &'a InferenceTree,
     cursor: &Cursor,
-    window_height: f32,
+    window_wh: Vec2,
     right_half_width: f32,
 ) -> Vec<DisplayInterval<'a>> {
     let nodes_from_root = inference_tree.get_nodes_on_path(&cursor.path);
     assert!(nodes_from_root.len() > 0);
     let size = right_half_width / (1.0 - cursor.x);
     let mut intervals = Vec::new();
-    intervals_from_node(
-        nodes_from_root.last().unwrap(),
-        window_height,
+    intervals_from_parent_nodes(
+        &nodes_from_root,
+        &cursor.path,
+        window_wh,
         size,
         -cursor.y * size,
         cursor.path.len(),
         &mut intervals,
-        -0.5 * window_height - 1.0,
-        0.5 * window_height + 1.0,
+    );
+    intervals.reverse();
+    intervals_from_node(
+        nodes_from_root.last().unwrap(),
+        window_wh.y,
+        size,
+        -cursor.y * size,
+        cursor.path.len(),
+        &mut intervals,
+        -0.5 * window_wh.y - 1.0,
+        0.5 * window_wh.y + 1.0,
     );
     intervals
+}
+
+fn intervals_from_parent_nodes<'a>(
+    nodes: &[&'a InferenceTreeNode],
+    path: &[TokenId],
+    window_wh: Vec2,
+    size: f32,
+    start: f32,
+    depth: usize,
+    output: &mut Vec<DisplayInterval<'a>>,
+) {
+    if nodes.len() < 2 {
+        return;
+    }
+
+    let node_index: usize = path[nodes.len() - 1].try_into().unwrap();
+    let parent = nodes[nodes.len() - 2];
+    let parent_children = parent.children.as_ref().unwrap();
+
+    let parent_size = size / parent_children.interval_sizes[node_index];
+    let parent_start = start - parent_children.interval_starts[node_index] * parent_size;
+    let parent_depth = depth - 1;
+
+    output.push(DisplayInterval {
+        start: parent_start,
+        end: parent_start + parent_size,
+        depth: parent_depth,
+        node: parent,
+    });
+
+    if parent_size < window_wh.x || parent_size < window_wh.y {
+        intervals_from_parent_nodes(
+            &nodes[..nodes.len() - 1],
+            &path[..nodes.len() - 1],
+            window_wh,
+            parent_size,
+            parent_start,
+            parent_depth,
+            output,
+        );
+    }
 }
 
 fn intervals_from_node<'a>(
@@ -254,7 +305,7 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
     let intervals = intervals_from_tree(
         &inference_tree,
         &model.cursor,
-        window_rect.h(),
+        window_rect.wh(),
         right_half_width,
     );
 
