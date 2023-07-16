@@ -181,10 +181,12 @@ fn intervals_from_tree(
     window_height: f32,
     right_half_width: f32,
 ) -> Vec<DisplayInterval> {
+    let nodes_from_root = inference_tree.get_nodes_on_path(&cursor.path);
+    assert!(nodes_from_root.len() > 0);
     let size = right_half_width / (1.0 - cursor.x);
     let mut intervals = Vec::new();
     intervals_from_node(
-        inference_tree.root(),
+        nodes_from_root.last().unwrap(),
         window_height,
         size,
         -cursor.y * size,
