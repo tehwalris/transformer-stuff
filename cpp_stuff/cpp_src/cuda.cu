@@ -84,32 +84,33 @@ namespace cml
       }
     }
 
-    __global__ void attention_dot_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t new_i, float *cache_k, float *new_q, float *attention)
+    __global__ void attention_dot_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t n_path, const uint32_t *path, float *cache_k, float *new_q, float *attention)
     {
-      uint32_t i_context = blockIdx.z;
+      uint32_t i_path = blockIdx.z;
       uint32_t i_head = blockIdx.y * blockDim.y + threadIdx.y;
       if (i_head < n_heads)
       {
+        uint32_t i_context = path[i_path];
         float sum = 0.0f;
         for (uint32_t i_in_head = threadIdx.x; i_in_head < n_hidden / n_heads; i_in_head += blockDim.x)
         {
           sum += cache_k[i_context * n_hidden + i_head * (n_hidden / n_heads) + i_in_head] * new_q[i_head * (n_hidden / n_heads) + i_in_head];
         }
-        atomicAdd(&attention[i_head * (new_i + 1) + i_context], sum);
+        atomicAdd(&attention[i_head * n_path + i_path], sum);
       }
     }
 
-    __global__ void attention_softmax_gpu(uint32_t new_i, float *attention, float dot_product_scale, float *sum)
+    __global__ void attention_softmax_gpu(uint32_t n_path, float *attention, float dot_product_scale, float *sum)
     {
       __shared__ float sum_shared[32];
       float sum_local = 0.0f;
 
       uint32_t i_head = blockIdx.y;
-      uint32_t i_context = blockIdx.x * blockDim.x + threadIdx.x;
-      if (i_context <= new_i)
+      uint32_t i_path = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i_path < n_path)
       {
-        float value = expf(dot_product_scale * attention[i_head * (new_i + 1) + i_context]);
-        attention[i_head * (new_i + 1) + i_context] = value;
+        float value = expf(dot_product_scale * attention[i_head * n_path + i_path]);
+        attention[i_head * n_path + i_path] = value;
         sum_local = value;
       }
 
@@ -131,7 +132,7 @@ namespace cml
       }
     }
 
-    __global__ void attention_sum_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t new_i, float *cache_v, float *attention, float *sum, float *out)
+    __global__ void attention_sum_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t n_path, const uint32_t *path, float *cache_v, float *attention, float *sum, float *out)
     {
       uint32_t i_head = blockIdx.y;
       uint32_t i_in_head = blockIdx.x * blockDim.x + threadIdx.x;
@@ -139,9 +140,10 @@ namespace cml
       if (i_in_head < n_hidden / n_heads)
       {
         float sum_local = 0.0f;
-        for (uint32_t i_context = 0; i_context <= new_i; i_context++)
+        for (uint32_t i_path = 0; i_path < n_path; i_path++)
         {
-          sum_local += attention[i_head * (new_i + 1) + i_context] / sum[i_head] * cache_v[i_context * n_hidden + i_head * (n_hidden / n_heads) + i_in_head];
+          uint32_t i_context = path[i_path];
+          sum_local += attention[i_head * n_path + i_path] / sum[i_head] * cache_v[i_context * n_hidden + i_head * (n_hidden / n_heads) + i_in_head];
         }
         out[i_head * (n_hidden / n_heads) + i_in_head] = sum_local;
       }
@@ -324,6 +326,7 @@ namespace cml
       thrust::device_vector<float> l2;                         // n_hidden
       thrust::device_vector<float> l3;                         // n_ff
       thrust::device_vector<char4> l3_quantized;               // n_ff
+      thrust::device_vector<uint32_t> path;                    // n_context
     };
 
     struct State
@@ -400,6 +403,7 @@ namespace cml
         temp.l2.resize(params.n_hidden);
         temp.l3.resize(params.n_ff);
         temp.l3_quantized.resize(params.n_ff / 4);
+        temp.path.resize(params.n_context);
 
         state.cache_k.resize(params.n_context * params.n_hidden);
         state.cache_v.resize(params.n_context * params.n_hidden);
@@ -425,13 +429,6 @@ namespace cml
         assert(n_path <= state.new_i + 1);
         assert(path[n_path - 1] == state.new_i);
 
-        // TODO non-linear paths are not supported yet
-        assert(n_path == state.new_i + 1);
-        for (int i = 0; i < n_path; i++)
-        {
-          assert(path[i] == i);
-        }
-
         const dim3 block_size_mul_n_hidden(32, 8);
         const dim3 grid_size_mul_n_hidden(1, ceil_div<uint32_t>(params.n_hidden, block_size_mul_n_hidden.y));
 
@@ -447,10 +444,10 @@ namespace cml
         const dim3 block_size_attention_dot(32, 8, 1);
         const dim3 grid_size_attention_dot(1,
                                            ceil_div<uint32_t>(params.n_heads, block_size_attention_dot.y),
-                                           state.new_i + 1);
+                                           n_path);
 
         const dim3 block_size_attention_softmax(32, 1);
-        const dim3 grid_size_attention_softmax(ceil_div<uint32_t>(state.new_i + 1, block_size_attention_softmax.x),
+        const dim3 grid_size_attention_softmax(ceil_div<uint32_t>(n_path, block_size_attention_softmax.x),
                                                params.n_heads);
 
         const dim3 block_size_attention_sum(32, 1);
@@ -459,6 +456,7 @@ namespace cml
 
         // Copy to GPU
         thrust::copy(hidden_in, hidden_in + params.n_hidden, temp.hidden_in.begin());
+        thrust::copy(path, path + n_path, temp.path.begin());
 
         // Zero accumulators
         thrust::fill(temp.q.begin(), temp.q.end(), 0.0f);
@@ -484,22 +482,22 @@ namespace cml
         post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.v.data().get(), weights.v.scale, qkv_unquantize_scale);
 
         // Apply RoPE
-        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, state.new_i, temp.q.data().get());
-        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, state.new_i, temp.k.data().get());
+        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, n_path - 1, temp.q.data().get());
+        rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, n_path - 1, temp.k.data().get());
 
         // Copy the new KV to the cache
         thrust::copy(temp.k.begin(), temp.k.end(), state.cache_k.begin() + state.new_i * params.n_hidden);
         thrust::copy(temp.v.begin(), temp.v.end(), state.cache_v.begin() + state.new_i * params.n_hidden);
 
         // Calculate the dot product with each cached K (per head)
-        attention_dot_gpu<<<grid_size_attention_dot, block_size_attention_dot>>>(params.n_hidden, params.n_heads, state.new_i, state.cache_k.data().get(), temp.q.data().get(), temp.attention.data().get());
+        attention_dot_gpu<<<grid_size_attention_dot, block_size_attention_dot>>>(params.n_hidden, params.n_heads, n_path, temp.path.data().get(), state.cache_k.data().get(), temp.q.data().get(), temp.attention.data().get());
 
         // Softmax (except divide)
         float dot_product_scale = 1.0f / std::sqrt(float(params.n_hidden / params.n_heads));
-        attention_softmax_gpu<<<grid_size_attention_softmax, block_size_attention_softmax>>>(state.new_i, temp.attention.data().get(), dot_product_scale, temp.attention_sum.data().get());
+        attention_softmax_gpu<<<grid_size_attention_softmax, block_size_attention_softmax>>>(n_path, temp.attention.data().get(), dot_product_scale, temp.attention_sum.data().get());
 
         // Sum V weighted by softmax attention
-        attention_sum_gpu<<<grid_size_attention_sum, block_size_attention_sum>>>(params.n_hidden, params.n_heads, state.new_i, state.cache_v.data().get(), temp.attention.data().get(), temp.attention_sum.data().get(), temp.attention_result.data().get());
+        attention_sum_gpu<<<grid_size_attention_sum, block_size_attention_sum>>>(params.n_hidden, params.n_heads, n_path, temp.path.data().get(), state.cache_v.data().get(), temp.attention.data().get(), temp.attention_sum.data().get(), temp.attention_result.data().get());
 
         // Projection and residual
         float projection_unquantize_scale = quantize_gpu_full(temp.attention_result, temp.attention_result_quantized);
