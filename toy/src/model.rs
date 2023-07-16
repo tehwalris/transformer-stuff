@@ -8,14 +8,14 @@ use rayon::prelude::*;
 use cpp_stuff_nice::SimpleTransformerLayer;
 use tracing::span;
 
-pub(crate) enum Backend {
+pub enum Backend {
     Baseline,
     Cuda,
     Hip,
 }
 
 impl Backend {
-    pub(crate) fn create_llama_layer(
+    pub fn create_llama_layer(
         &self,
         loader: &mut cpp_stuff_nice::SimpleLlamaModelLoader,
         i_layer: usize,
@@ -33,20 +33,17 @@ impl Backend {
     }
 }
 
-pub(crate) struct Model {
-    pub(crate) n_hidden: usize,
-    pub(crate) n_vocab: usize,
-    pub(crate) n_context: usize,
-    pub(crate) layers: Vec<SimpleTransformerLayer>,
-    pub(crate) final_layer: SimpleTransformerLayer,
+pub struct Model {
+    pub n_hidden: usize,
+    pub n_vocab: usize,
+    pub n_context: usize,
+    pub n_cache: usize,
+    pub layers: Vec<SimpleTransformerLayer>,
+    pub final_layer: SimpleTransformerLayer,
 }
 
 impl Model {
-    pub(crate) fn load(
-        path: impl AsRef<Path>,
-        layer_backends: &[Backend],
-        show_progress: bool,
-    ) -> Self {
+    pub fn load(path: impl AsRef<Path>, layer_backends: &[Backend], show_progress: bool) -> Self {
         let path = path.as_ref().to_str().unwrap().to_owned();
 
         let loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
@@ -90,12 +87,13 @@ impl Model {
             n_hidden,
             n_vocab,
             n_context,
+            n_cache,
             layers,
             final_layer,
         }
     }
 
-    pub(crate) fn predict(&mut self, hidden_in: &[f32], path: &[u32]) -> Vec<f32> {
+    pub fn predict(&mut self, hidden_in: &[f32], path: &[u32]) -> Vec<f32> {
         assert_eq!(hidden_in.len(), self.n_hidden);
         assert!(path.len() > 0);
         assert!(path.len() <= self.n_context);
@@ -127,14 +125,16 @@ impl Model {
         final_out
     }
 
-    pub(crate) fn next_i(&self) -> u32 {
+    pub fn next_i(&self) -> u32 {
         self.layers.first().unwrap().next_i()
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub fn retain(&mut self, indices: &[usize]) {
+        let indices: Vec<u32> = indices.iter().map(|&i| i.try_into().unwrap()).collect();
+        assert!(indices.len() <= self.n_cache);
         for layer in &mut self.layers {
-            layer.reset();
+            layer.retain(&indices);
         }
-        self.final_layer.reset();
+        self.final_layer.retain(&indices);
     }
 }

@@ -56,8 +56,14 @@ impl SimpleTransformerLayer {
         unsafe { cml_simple_transformer_layer_next_i(self.0) }
     }
 
-    pub fn reset(&mut self) {
-        unsafe { cml_simple_transformer_layer_reset(self.0) }
+    pub fn retain(&mut self, indices: &[u32]) {
+        unsafe {
+            cml_simple_transformer_layer_retain(
+                self.0,
+                indices.len().try_into().unwrap(),
+                indices.as_ptr(),
+            )
+        }
     }
 }
 

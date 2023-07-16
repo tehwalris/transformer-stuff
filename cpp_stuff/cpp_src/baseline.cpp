@@ -360,9 +360,27 @@ namespace cml
         return state.new_i;
       }
 
-      virtual void reset() override
+      virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
-        state.new_i = 0;
+        assert(n_retain <= state.new_i);
+        assert(n_retain <= params.n_cache);
+
+        float *old_cache_k = state.cache_k;
+        float *old_cache_v = state.cache_v;
+
+        state.cache_k = aligned_alloc_floats(params.n_cache * params.n_hidden);
+        state.cache_v = aligned_alloc_floats(params.n_cache * params.n_hidden);
+
+        for (uint32_t i = 0; i < n_retain; i++)
+        {
+          memcpy(&state.cache_k[i * params.n_hidden], &old_cache_k[retain[i] * params.n_hidden], params.n_hidden * sizeof(float));
+          memcpy(&state.cache_v[i * params.n_hidden], &old_cache_v[retain[i] * params.n_hidden], params.n_hidden * sizeof(float));
+        }
+
+        free(old_cache_k);
+        free(old_cache_v);
+
+        state.new_i = n_retain;
       }
 
     private:
@@ -429,9 +447,10 @@ namespace cml
         return new_i;
       }
 
-      virtual void reset() override
+      virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
-        new_i = 0;
+        assert(n_retain <= new_i);
+        new_i = n_retain;
       }
 
     private:

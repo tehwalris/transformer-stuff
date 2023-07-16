@@ -540,9 +540,24 @@ namespace cml
         return state.new_i;
       }
 
-      virtual void reset() override
+      virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
-        state.new_i = 0;
+        assert(n_retain <= state.new_i);
+        assert(n_retain <= params.n_cache);
+
+        thrust::device_vector<float> old_cache_k(params.n_cache * params.n_hidden);
+        thrust::device_vector<float> old_cache_v(params.n_cache * params.n_hidden);
+
+        old_cache_k.swap(state.cache_k);
+        old_cache_v.swap(state.cache_v);
+
+        for (uint32_t i = 0; i < n_retain; i++)
+        {
+          thrust::copy(old_cache_k.begin() + retain[i] * params.n_hidden, old_cache_k.begin() + (retain[i] + 1) * params.n_hidden, state.cache_k.begin() + i * params.n_hidden);
+          thrust::copy(old_cache_v.begin() + retain[i] * params.n_hidden, old_cache_v.begin() + (retain[i] + 1) * params.n_hidden, state.cache_v.begin() + i * params.n_hidden);
+        }
+
+        state.new_i = n_retain;
       }
 
     private:
@@ -624,9 +639,10 @@ namespace cml
         return new_i;
       }
 
-      virtual void reset() override
+      virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
-        new_i = 0;
+        assert(n_retain <= new_i);
+        new_i = n_retain;
       }
 
     private:

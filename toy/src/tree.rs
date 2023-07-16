@@ -17,12 +17,17 @@ impl InferenceTree {
         &self.0
     }
 
+    pub fn root_mut(&mut self) -> &mut InferenceTreeNode {
+        &mut self.0
+    }
+
     pub fn get_nodes_on_path(&self, path: &[TokenId]) -> Vec<&InferenceTreeNode> {
         if path.is_empty() {
             return vec![];
         }
         let mut nodes = vec![];
         let mut node = self.root();
+        assert!(path[0] == node.token_id);
         nodes.push(node);
         for &token_id in &path[1..] {
             node = match node.get_child(token_id) {
@@ -32,6 +37,23 @@ impl InferenceTree {
             nodes.push(node);
         }
         assert!(nodes.len() == path.len());
+        nodes
+    }
+
+    pub fn try_get_nodes_on_path(&self, path: &[TokenId]) -> Vec<&InferenceTreeNode> {
+        let mut node = self.root();
+        if node.token_id != path[0] {
+            return vec![];
+        }
+        let mut nodes = vec![node];
+        for &token_id in &path[1..] {
+            node = match node.get_child(token_id) {
+                Some(child) => child,
+                None => break,
+            };
+            nodes.push(node);
+        }
+        assert!(nodes.len() <= path.len());
         nodes
     }
 

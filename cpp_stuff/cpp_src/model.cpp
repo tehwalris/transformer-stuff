@@ -17,8 +17,8 @@ namespace cml
     return layer->next_i();
   }
 
-  void simple_transformer_layer_reset(SimpleTransformerLayer *layer)
+  void simple_transformer_layer_retain(SimpleTransformerLayer *layer, const uint32_t n_retain, const uint32_t *retain)
   {
-    layer->reset();
+    layer->retain(n_retain, retain);
   }
 }
