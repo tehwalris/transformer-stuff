@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use llm_base::TokenId;
+use llm_base::{TokenId, TokenUtf8Buffer};
 use nannou::{event::ElementState, prelude::*};
+use rayon::string;
 
 use crate::tree::{InferenceTree, InferenceTreeNode};
 
@@ -232,19 +233,37 @@ fn intervals_from_node(
     }
 }
 
+fn get_text_at_path(inference_tree: &InferenceTree, path: &[TokenId]) -> String {
+    let mut string_parts = vec![];
+    let mut print_buffer = TokenUtf8Buffer::new();
+    for node in inference_tree.get_nodes_on_path(path) {
+        if let Some(string_part) = print_buffer.push(&node.token) {
+            string_parts.push(string_part);
+        }
+    }
+    string_parts.join("")
+}
+
 fn view(app: &App, model: &UIModel, frame: Frame) {
     let draw = app.draw();
     let window_rect = app.window_rect();
+    let right_half_width = window_rect.w() / 3.0;
 
     draw.background().color(BLACK);
 
-    let right_half_width = window_rect.w() / 3.0;
+    let inference_tree = model.inference_tree.lock().unwrap();
+
     let intervals = intervals_from_tree(
-        &model.inference_tree.lock().unwrap(),
+        &inference_tree,
         &model.cursor,
         window_rect.h(),
         right_half_width,
     );
+
+    let cursor_text = get_text_at_path(&inference_tree, &model.cursor.path);
+
+    drop(inference_tree);
+
     for DisplayInterval { start, end, depth } in intervals {
         let size = end - start;
         let rect = Rect::from_x_y_w_h(
@@ -277,6 +296,14 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
         .xy(model.steering)
         .radius(5.0)
         .color(if model.moving { WHITE } else { BLACK });
+
+    let text_rect = Rect::from_wh(0.5 * window_rect.wh()).top_left_of(window_rect);
+    draw.text(&cursor_text)
+        .xy(text_rect.xy())
+        .wh(text_rect.wh())
+        .left_justify()
+        .align_text_bottom()
+        .color(WHITE);
 
     draw.to_frame(app, &frame).unwrap();
 }

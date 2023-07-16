@@ -16,6 +16,7 @@ impl InferenceTree {
     pub fn new(root_token_id: TokenId) -> Self {
         Self(InferenceTreeNode {
             token_id: root_token_id,
+            token: vec![],
             probability: 1.0,
             prediction_id: None,
             children: None,
@@ -57,6 +58,7 @@ impl InferenceTree {
 #[derive(Clone)]
 pub struct InferenceTreeNode {
     pub token_id: TokenId,
+    pub token: Vec<u8>,
     pub probability: f32,
     pub prediction_id: Option<u32>,
     pub children: Option<Vec<InferenceTreeNode>>,

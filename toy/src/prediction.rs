@@ -9,7 +9,7 @@ use crate::{
     tree::{InferenceTree, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
-use llm_base::{TokenId, TokenUtf8Buffer};
+use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -34,6 +34,7 @@ fn get_prediction_path<'a>(
 
 fn try_predict_next(
     model: &mut Model,
+    vocab: &Vocabulary,
     vocab_embeddings: &VocabEmbeddings,
     inference_tree: &Arc<Mutex<InferenceTree>>,
     focused_path: &[TokenId],
@@ -69,6 +70,7 @@ fn try_predict_next(
         .enumerate()
         .map(|(i, probability)| InferenceTreeNode {
             token_id: TokenId::try_from(i).unwrap(),
+            token: vocab.token(i).to_vec(),
             probability: probability,
             prediction_id: None,
             children: None,
@@ -112,6 +114,7 @@ pub fn prediction_thread_main(
         let focused_path = focused_path.lock().unwrap().clone();
         let did_predict = try_predict_next(
             &mut model,
+            &vocab,
             &vocab_embeddings,
             &inference_tree,
             &focused_path,
@@ -127,7 +130,6 @@ pub fn prediction_thread_main(
             }
 
             println!("Predicted path {:?}", focused_path);
-            println!("{}", string_parts.join(""));
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
