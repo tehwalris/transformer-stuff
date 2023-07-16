@@ -42,14 +42,16 @@ fn try_predict_next(
     let (mut prediction_path, final_node_clone) = {
         let inference_tree = inference_tree.lock().unwrap();
         match get_prediction_path(&inference_tree, &focused_path) {
-            Some((prediction_path, final_node)) => (prediction_path, final_node.clone()),
+            Some((prediction_path, final_node)) => {
+                if final_node.children.is_some() {
+                    return false;
+                }
+                (prediction_path, final_node.clone())
+            }
             None => return false,
         }
     };
 
-    if final_node_clone.children.is_some() {
-        return false;
-    }
     let prediction_id = model.next_i();
     prediction_path.push(prediction_id);
 
