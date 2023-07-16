@@ -9,7 +9,7 @@ use crate::{
     tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
-use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
+use llm_base::{TokenId, Vocabulary};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,

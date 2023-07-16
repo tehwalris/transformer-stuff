@@ -71,7 +71,7 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
-        let mut hidden_in = (0..n_hidden).map(|_| rng.gen()).collect::<Vec<_>>();
+        let hidden_in = (0..n_hidden).map(|_| rng.gen()).collect::<Vec<_>>();
         let mut final_out_baseline = vec![0.0; n_vocab];
         let mut final_out_cuda = vec![0.0; n_vocab];
 

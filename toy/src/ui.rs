@@ -1,9 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use llm_base::{TokenId, TokenUtf8Buffer};
-use nannou::{event::ElementState, prelude::*, text::cursor::closest_cursor_index_and_xy};
-use rayon::string;
-use tracing::callsite;
+use nannou::prelude::*;
 
 use crate::tree::{InferenceTree, InferenceTreeNode};
 
