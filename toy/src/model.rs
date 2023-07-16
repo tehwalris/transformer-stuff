@@ -19,12 +19,16 @@ impl Backend {
         &self,
         loader: &mut cpp_stuff_nice::SimpleLlamaModelLoader,
         i_layer: usize,
+        n_cache: usize,
     ) -> SimpleTransformerLayer {
         let i_layer = i_layer.try_into().unwrap();
+        let n_cache = n_cache.try_into().unwrap();
         match self {
-            Backend::Baseline => cpp_stuff_nice::baseline::create_llama_layer(loader, i_layer),
-            Backend::Cuda => cpp_stuff_nice::cuda::create_llama_layer(loader, i_layer),
-            Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer),
+            Backend::Baseline => {
+                cpp_stuff_nice::baseline::create_llama_layer(loader, i_layer, n_cache)
+            }
+            Backend::Cuda => cpp_stuff_nice::cuda::create_llama_layer(loader, i_layer, n_cache),
+            Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer, n_cache),
         }
     }
 }
@@ -66,6 +70,7 @@ impl Model {
             cpp_stuff_nice::cuda::create_llama_final_layer(&mut loader)
         });
 
+        let n_cache = n_context * 2; // arbitrary choice
         let layers: Vec<SimpleTransformerLayer> = layer_backends
             .par_iter()
             .enumerate()
@@ -73,7 +78,7 @@ impl Model {
                 let span = span!(tracing::Level::INFO, "load_layer", i_layer);
                 let _enter = span.enter();
                 let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
-                let layer = backend.create_llama_layer(&mut loader, i_layer);
+                let layer = backend.create_llama_layer(&mut loader, i_layer, n_cache);
                 progress_bar.inc(1);
                 layer
             })

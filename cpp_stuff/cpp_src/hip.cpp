@@ -26,6 +26,7 @@ namespace cml
       uint32_t n_context;
       uint32_t n_heads;
       uint32_t n_ff;
+      uint32_t n_cache;
     };
 
     __global__ void mul_gpu(int n_rows, int n_cols, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
@@ -340,21 +341,22 @@ namespace cml
 
     struct State
     {
-      thrust::device_vector<float> cache_k; // n_context * n_hidden
-      thrust::device_vector<float> cache_v; // n_context * n_hidden
+      thrust::device_vector<float> cache_k; // n_cache * n_hidden
+      thrust::device_vector<float> cache_v; // n_cache * n_hidden
       uint32_t new_i;
     };
 
     class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
       {
         llama_hparams *hparams = loader->get_hparams();
         params.n_hidden = hparams->n_embd;
         params.n_context = hparams->n_ctx;
         params.n_heads = hparams->n_head;
         params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
+        params.n_cache = n_cache;
 
         assert(layer_index < hparams->n_layer);
         assert(params.n_hidden % 4 == 0);
@@ -416,8 +418,8 @@ namespace cml
         temp.l3_quantized.resize(params.n_ff / 4);
         temp.path.resize(params.n_context);
 
-        state.cache_k.resize(params.n_context * params.n_hidden);
-        state.cache_v.resize(params.n_context * params.n_hidden);
+        state.cache_k.resize(params.n_cache * params.n_hidden);
+        state.cache_v.resize(params.n_cache * params.n_hidden);
         state.new_i = 0;
 
         HIP_CHECK(hipDeviceSynchronize());
@@ -435,9 +437,10 @@ namespace cml
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
-        assert(state.new_i < params.n_context);
+        assert(state.new_i < params.n_cache);
         assert(n_path > 0);
         assert(n_path <= state.new_i + 1);
+        assert(n_path <= params.n_context);
         assert(path[n_path - 1] == state.new_i);
 
         const dim3 block_size_mul_n_hidden(32, 8);
@@ -562,9 +565,9 @@ namespace cml
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index)
+    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
     {
-      return new LlamaLayer(loader, layer_index);
+      return new LlamaLayer(loader, layer_index, n_cache);
     }
   };
 };

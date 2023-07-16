@@ -75,9 +75,14 @@ pub mod baseline {
     pub fn create_llama_layer(
         loader: &mut SimpleLlamaModelLoader,
         layer_index: u32,
+        n_cache: u32,
     ) -> SimpleTransformerLayer {
         unsafe {
-            SimpleTransformerLayer(cml_baseline_create_llama_layer(&mut loader.0, layer_index))
+            SimpleTransformerLayer(cml_baseline_create_llama_layer(
+                &mut loader.0,
+                layer_index,
+                n_cache,
+            ))
         }
     }
 
@@ -92,8 +97,15 @@ pub mod cuda {
     pub fn create_llama_layer(
         loader: &mut SimpleLlamaModelLoader,
         layer_index: u32,
+        n_cache: u32,
     ) -> SimpleTransformerLayer {
-        unsafe { SimpleTransformerLayer(cml_cuda_create_llama_layer(&mut loader.0, layer_index)) }
+        unsafe {
+            SimpleTransformerLayer(cml_cuda_create_llama_layer(
+                &mut loader.0,
+                layer_index,
+                n_cache,
+            ))
+        }
     }
 
     pub fn create_llama_final_layer(loader: &mut SimpleLlamaModelLoader) -> SimpleTransformerLayer {
@@ -107,7 +119,14 @@ pub mod hip {
     pub fn create_llama_layer(
         loader: &mut SimpleLlamaModelLoader,
         layer_index: u32,
+        n_cache: u32,
     ) -> SimpleTransformerLayer {
-        unsafe { SimpleTransformerLayer(cml_hip_create_llama_layer(&mut loader.0, layer_index)) }
+        unsafe {
+            SimpleTransformerLayer(cml_hip_create_llama_layer(
+                &mut loader.0,
+                layer_index,
+                n_cache,
+            ))
+        }
     }
 }
