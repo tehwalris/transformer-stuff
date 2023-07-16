@@ -106,26 +106,91 @@ pub struct InferenceTreeChildren {
     pub indices_by_interval_size: Vec<usize>, // largest interval size first
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NodeSortGroup {
+    NoSpaceLowercase,
+    NoSpaceUppercase,
+    SpaceLowercase,
+    SpaceUppercase,
+    Other,
+}
+
+impl NodeSortGroup {
+    fn from_token(token: &[u8]) -> NodeSortGroup {
+        if token.is_empty() {
+            return NodeSortGroup::Other;
+        }
+        let first_char = token[0];
+        if first_char == b' ' {
+            if token.len() == 1 {
+                NodeSortGroup::Other
+            } else if token[1].is_ascii_lowercase() {
+                NodeSortGroup::SpaceLowercase
+            } else if token[1].is_ascii_uppercase() {
+                NodeSortGroup::SpaceUppercase
+            } else {
+                NodeSortGroup::Other
+            }
+        } else {
+            if first_char.is_ascii_lowercase() {
+                return NodeSortGroup::NoSpaceLowercase;
+            } else if first_char.is_ascii_uppercase() {
+                return NodeSortGroup::NoSpaceUppercase;
+            } else {
+                NodeSortGroup::Other
+            }
+        }
+    }
+}
+
 impl InferenceTreeChildren {
     pub fn from_nodes(nodes: Vec<InferenceTreeNode>) -> InferenceTreeChildren {
-        let interval_sizes: Vec<f32> = nodes.iter().map(|node| node.probability).collect();
-        let interval_ends: Vec<f32> = interval_sizes
+        let sorted_indices = {
+            let mut indices: Vec<usize> = (0..nodes.len()).collect();
+            indices.sort_by_key(|&i| {
+                let token = &nodes[i].token;
+                (NodeSortGroup::from_token(token), token)
+            });
+            indices
+        };
+        let inverse_sorted_indices: Vec<usize> = {
+            let mut indices: Vec<usize> = (0..nodes.len()).collect();
+            indices.sort_by_key(|&i| sorted_indices[i]);
+            indices
+        };
+
+        let sorted_interval_sizes: Vec<f32> = sorted_indices
+            .iter()
+            .map(|&i| nodes[i].probability)
+            .collect();
+        let sorted_interval_ends: Vec<f32> = sorted_interval_sizes
             .iter()
             .scan(0.0, |end, &size| {
                 *end += size;
                 Some(*end)
             })
             .collect();
-        let interval_starts = interval_ends
+        let sorted_interval_starts: Vec<f32> = sorted_interval_ends
             .iter()
-            .zip(interval_sizes.iter())
+            .zip(sorted_interval_sizes.iter())
             .map(|(&end, &size)| end - size)
             .collect();
+
+        let interval_starts: Vec<f32> = inverse_sorted_indices
+            .iter()
+            .map(|&i| sorted_interval_starts[i])
+            .collect();
+        let interval_sizes: Vec<f32> = inverse_sorted_indices
+            .iter()
+            .map(|&i| sorted_interval_sizes[i])
+            .collect();
+
         let indices_by_interval_size = {
             let mut indices: Vec<usize> = (0..nodes.len()).collect();
             indices.sort_by(|&i, &j| interval_sizes[j].partial_cmp(&interval_sizes[i]).unwrap());
             indices
         };
+
         InferenceTreeChildren {
             nodes,
             interval_starts,
