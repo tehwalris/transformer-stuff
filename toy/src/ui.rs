@@ -155,18 +155,19 @@ impl UIModel {
     }
 }
 
-struct DisplayInterval {
+struct DisplayInterval<'a> {
     start: f32,
     end: f32,
     depth: usize,
+    node: &'a InferenceTreeNode,
 }
 
-fn intervals_from_tree(
-    inference_tree: &InferenceTree,
+fn intervals_from_tree<'a>(
+    inference_tree: &'a InferenceTree,
     cursor: &Cursor,
     window_height: f32,
     right_half_width: f32,
-) -> Vec<DisplayInterval> {
+) -> Vec<DisplayInterval<'a>> {
     let nodes_from_root = inference_tree.get_nodes_on_path(&cursor.path);
     assert!(nodes_from_root.len() > 0);
     let size = right_half_width / (1.0 - cursor.x);
@@ -184,18 +185,23 @@ fn intervals_from_tree(
     intervals
 }
 
-fn intervals_from_node(
-    node: &InferenceTreeNode,
+fn intervals_from_node<'a>(
+    node: &'a InferenceTreeNode,
     window_height: f32,
     size: f32,
     start: f32,
     depth: usize,
-    output: &mut Vec<DisplayInterval>,
+    output: &mut Vec<DisplayInterval<'a>>,
     output_start: f32,
     output_end: f32,
 ) {
     let end = start + size;
-    output.push(DisplayInterval { start, end, depth });
+    output.push(DisplayInterval {
+        start,
+        end,
+        depth,
+        node,
+    });
 
     if size < 1.0 {
         return;
@@ -254,9 +260,13 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
 
     let cursor_text = get_text_at_path(&inference_tree, &model.cursor.path);
 
-    drop(inference_tree);
-
-    for &DisplayInterval { start, end, depth } in &intervals {
+    for &DisplayInterval {
+        start,
+        end,
+        depth,
+        node: _,
+    } in &intervals
+    {
         let size = end - start;
         let rect = Rect::from_x_y_w_h(
             right_half_width - 0.5 * size,
@@ -289,6 +299,7 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
         .radius(5.0)
         .color(if model.moving { WHITE } else { BLACK });
 
+    // Generated text
     let text_rect = Rect::from_wh(0.5 * window_rect.wh()).top_left_of(window_rect);
     draw.text(&cursor_text)
         .xy(text_rect.xy())
@@ -296,6 +307,31 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
         .left_justify()
         .align_text_bottom()
         .color(WHITE);
+
+    // Text of possible next tokens
+    for interval in intervals {
+        if interval.depth != model.cursor.path.len() + 1 {
+            continue;
+        }
+        if interval.end - interval.start < 20.0 {
+            continue;
+        }
+        if let Ok(text) = String::from_utf8(interval.node.token.clone()) {
+            draw.text(&text)
+                .x_y(
+                    right_half_width + 0.5 * (0.5 * window_rect.w() - right_half_width),
+                    -0.5 * (interval.start + interval.end),
+                )
+                .w_h(
+                    0.5 * window_rect.w() - right_half_width,
+                    interval.end - interval.start,
+                )
+                .left_justify()
+                .color(if text.starts_with(' ') { RED } else { WHITE });
+        }
+    }
+
+    drop(inference_tree);
 
     draw.to_frame(app, &frame).unwrap();
 }
