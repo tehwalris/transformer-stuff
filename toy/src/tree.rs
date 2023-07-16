@@ -71,7 +71,7 @@ impl InferenceTree {
 pub struct InferenceTreeNode {
     pub token_id: TokenId,
     pub token: Vec<u8>,
-    pub probability: f32,
+    pub probability: f64,
     pub prediction_id: Option<u32>,
     pub children: Option<InferenceTreeChildren>,
 }
@@ -101,8 +101,8 @@ impl InferenceTreeNode {
 #[derive(Clone)]
 pub struct InferenceTreeChildren {
     pub nodes: Vec<InferenceTreeNode>,
-    pub interval_starts: Vec<f32>,
-    pub interval_sizes: Vec<f32>,
+    pub interval_starts: Vec<f64>,
+    pub interval_sizes: Vec<f64>,
     pub indices_by_interval_size: Vec<usize>, // largest interval size first
 }
 
@@ -159,28 +159,28 @@ impl InferenceTreeChildren {
             indices
         };
 
-        let sorted_interval_sizes: Vec<f32> = sorted_indices
+        let sorted_interval_sizes: Vec<f64> = sorted_indices
             .iter()
             .map(|&i| nodes[i].probability)
             .collect();
-        let sorted_interval_ends: Vec<f32> = sorted_interval_sizes
+        let sorted_interval_ends: Vec<f64> = sorted_interval_sizes
             .iter()
             .scan(0.0, |end, &size| {
                 *end += size;
                 Some(*end)
             })
             .collect();
-        let sorted_interval_starts: Vec<f32> = sorted_interval_ends
+        let sorted_interval_starts: Vec<f64> = sorted_interval_ends
             .iter()
             .zip(sorted_interval_sizes.iter())
             .map(|(&end, &size)| end - size)
             .collect();
 
-        let interval_starts: Vec<f32> = inverse_sorted_indices
+        let interval_starts: Vec<f64> = inverse_sorted_indices
             .iter()
             .map(|&i| sorted_interval_starts[i])
             .collect();
-        let interval_sizes: Vec<f32> = inverse_sorted_indices
+        let interval_sizes: Vec<f64> = inverse_sorted_indices
             .iter()
             .map(|&i| sorted_interval_sizes[i])
             .collect();

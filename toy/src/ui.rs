@@ -7,8 +7,8 @@ use crate::tree::{InferenceTree, InferenceTreeNode};
 
 struct Cursor {
     path: Vec<TokenId>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 }
 
 impl Cursor {
@@ -129,10 +129,10 @@ impl UIModel {
         let right_half_width = window_rect.w() / 3.0;
 
         self.steering = (app.mouse.position()).clamp_length_max(right_half_width);
-        let speed = self.steering / right_half_width
-            * (1.0 - self.cursor.x)
-            * self.speed
-            * update.since_last.secs() as f32;
+        let speed =
+            (self.steering / right_half_width * self.speed * update.since_last.secs() as f32)
+                .as_f64()
+                * (1.0 - self.cursor.x);
         if self.moving {
             self.cursor.x += speed.x;
             self.cursor.y -= speed.y;
@@ -170,7 +170,7 @@ fn intervals_from_tree<'a>(
 ) -> Vec<DisplayInterval<'a>> {
     let nodes_from_root = inference_tree.get_nodes_on_path(&cursor.path);
     assert!(nodes_from_root.len() > 0);
-    let size = right_half_width / (1.0 - cursor.x);
+    let size = (right_half_width as f64) / (1.0 - cursor.x);
     let mut intervals = Vec::new();
     intervals_from_parent_nodes(
         &nodes_from_root,
@@ -184,13 +184,13 @@ fn intervals_from_tree<'a>(
     intervals.reverse();
     intervals_from_node(
         nodes_from_root.last().unwrap(),
-        window_wh.y,
+        window_wh.y as f64,
         size,
-        -cursor.y * size,
+        -(cursor.y as f64) * size,
         cursor.path.len(),
         &mut intervals,
-        -0.5 * window_wh.y - 1.0,
-        0.5 * window_wh.y + 1.0,
+        (-0.5 * window_wh.y - 1.0) as f64,
+        (0.5 * window_wh.y + 1.0) as f64,
     );
     intervals
 }
@@ -199,8 +199,8 @@ fn intervals_from_parent_nodes<'a>(
     nodes: &[&'a InferenceTreeNode],
     path: &[TokenId],
     window_wh: Vec2,
-    size: f32,
-    start: f32,
+    size: f64,
+    start: f64,
     depth: usize,
     output: &mut Vec<DisplayInterval<'a>>,
 ) {
@@ -217,13 +217,13 @@ fn intervals_from_parent_nodes<'a>(
     let parent_depth = depth - 1;
 
     output.push(DisplayInterval {
-        start: parent_start,
-        end: parent_start + parent_size,
+        start: parent_start as f32,
+        end: (parent_start + parent_size) as f32,
         depth: parent_depth,
         node: parent,
     });
 
-    if parent_size < window_wh.x || parent_size < window_wh.y {
+    if (parent_size as f32) < window_wh.x || (parent_size as f32) < window_wh.y {
         intervals_from_parent_nodes(
             &nodes[..nodes.len() - 1],
             &path[..nodes.len() - 1],
@@ -238,18 +238,18 @@ fn intervals_from_parent_nodes<'a>(
 
 fn intervals_from_node<'a>(
     node: &'a InferenceTreeNode,
-    window_height: f32,
-    size: f32,
-    start: f32,
+    window_height: f64,
+    size: f64,
+    start: f64,
     depth: usize,
     output: &mut Vec<DisplayInterval<'a>>,
-    output_start: f32,
-    output_end: f32,
+    output_start: f64,
+    output_end: f64,
 ) {
     let end = start + size;
     output.push(DisplayInterval {
-        start,
-        end,
+        start: start as f32,
+        end: end as f32,
         depth,
         node,
     });
@@ -319,10 +319,11 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
     } in &intervals
     {
         let size = end - start;
+        let w_clamped = size.min(window_rect.len());
         let rect = Rect::from_x_y_w_h(
-            right_half_width - 0.5 * size,
+            right_half_width - 0.5 * w_clamped,
             -0.5 * (start + end),
-            size,
+            w_clamped,
             size,
         );
         if let Some(rect) = rect.overlap(window_rect) {

@@ -77,11 +77,11 @@ fn try_predict_next(
     let hidden_in = vocab_embeddings.get_embedding(target_node_clone.token_id.try_into().unwrap());
     let final_out = model.predict(&hidden_in, &prediction_path);
 
-    let mut probabilities: Vec<f32> = final_out
+    let mut probabilities: Vec<f64> = final_out
         .iter()
-        .map(|&log_probability| log_probability.exp())
+        .map(|&log_probability| (log_probability as f64).exp())
         .collect();
-    let sum_of_probabilities: f32 = probabilities.iter().sum();
+    let sum_of_probabilities: f64 = probabilities.iter().sum();
     for probability in probabilities.iter_mut() {
         *probability /= sum_of_probabilities;
     }
@@ -93,7 +93,7 @@ fn try_predict_next(
             .map(|(i, probability)| InferenceTreeNode {
                 token_id: TokenId::try_from(i).unwrap(),
                 token: vocab.token(i).to_vec(),
-                probability: probability,
+                probability,
                 prediction_id: None,
                 children: None,
             })
