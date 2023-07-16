@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use llm_base::{TokenId, TokenUtf8Buffer};
-use nannou::{event::ElementState, prelude::*};
+use nannou::{event::ElementState, prelude::*, text::cursor::closest_cursor_index_and_xy};
 use rayon::string;
+use tracing::callsite;
 
 use crate::tree::{InferenceTree, InferenceTreeNode};
 
@@ -34,13 +35,11 @@ impl Cursor {
             self.path.pop().unwrap();
             let parent = *nodes_from_root.last().unwrap();
             let parent_children = parent.children.as_ref().unwrap();
-            let node_probability_offset = parent_children
-                .iter()
-                .take_while(|child| child.token_id != node.token_id)
-                .map(|child| child.probability)
-                .sum::<f32>();
-            self.y = node_probability_offset + self.y * node.probability;
-            self.x = 1.0 - (1.0 - self.x) * node.probability;
+            let node_index: usize = node.token_id.try_into().unwrap();
+            let node_interval_start = parent_children.interval_starts[node_index];
+            let node_interval_size = parent_children.interval_sizes[node_index];
+            self.y = node_interval_start + self.y * node_interval_size;
+            self.x = 1.0 - (1.0 - self.x) * node_interval_size;
         }
         assert!(nodes_from_root.len() == self.path.len());
         assert!(nodes_from_root.len() > 0);
@@ -60,31 +59,23 @@ impl Cursor {
                 Some(children) => children,
                 None => break,
             };
-            let child_end_probabilities = children
-                .iter()
-                .scan(0.0, |cumulative_probability, child| {
-                    *cumulative_probability += child.probability;
-                    Some(*cumulative_probability)
-                })
-                .collect::<Vec<_>>();
 
             let child_index = children
+                .interval_starts
                 .iter()
-                .zip(child_end_probabilities.iter())
-                .position(|(child, &end_probability)| {
-                    let start_probability = end_probability - child.probability;
-                    child.probability > 0.0
-                        && self.y >= start_probability
-                        && self.y <= end_probability
+                .zip(children.interval_sizes.iter())
+                .position(|(&interval_start, &interval_size)| {
+                    let interval_end = interval_start + interval_size;
+                    interval_size > 0.0 && self.y >= interval_start && self.y <= interval_end
                 });
             let child_index = match child_index {
                 Some(candidate_child_index) => candidate_child_index,
                 None => break,
             };
 
-            let child = &children[child_index];
-            let child_end_probability = child_end_probabilities[child_index];
-            let child_start_probability = child_end_probability - child.probability;
+            let child = &children.nodes[child_index];
+            let child_interval_size = children.interval_sizes[child_index];
+            let child_interval_start = children.interval_starts[child_index];
 
             if self.x < 1.0 - child.probability {
                 break;
@@ -92,8 +83,8 @@ impl Cursor {
 
             nodes_from_root.push(child);
             self.path.push(child.token_id);
-            self.y = ((self.y - child_start_probability) / child.probability).clamp(0.0, 1.0);
-            self.x = ((self.x - (1.0 - child.probability)) / child.probability).clamp(0.0, 1.0);
+            self.y = ((self.y - child_interval_start) / child_interval_size).clamp(0.0, 1.0);
+            self.x = ((self.x - (1.0 - child_interval_size)) / child_interval_size).clamp(0.0, 1.0);
         }
         assert!(nodes_from_root.len() == self.path.len());
         assert!(nodes_from_root.len() > 0);
@@ -212,22 +203,21 @@ fn intervals_from_node(
     let end = start + size;
     output.push(DisplayInterval { start, end, depth });
 
-    if size < 5.0 {
+    if size < 1.0 {
         return;
     }
 
     if let Some(children) = node.children.as_ref() {
-        let mut child_start = start;
-        for child in children {
-            let remaining_space = size - child_start;
-            if remaining_space < 1.0 {
+        for &child_index in &children.indices_by_interval_size {
+            let child_size = children.interval_sizes[child_index] * size;
+            if child_size < 1.0 {
                 break;
             }
-            let child_size = child.probability * size;
+            let child_start = children.interval_starts[child_index] * size + start;
             let child_end = child_start + child_size;
-            if child_size >= 1.0 && child_end >= output_start && child_start <= output_end {
+            if child_end >= output_start && child_start <= output_end {
                 intervals_from_node(
-                    child,
+                    &children.nodes[child_index],
                     window_height,
                     child_size,
                     child_start,
@@ -237,7 +227,6 @@ fn intervals_from_node(
                     output_end,
                 );
             }
-            child_start = child_end;
         }
     }
 }
@@ -273,7 +262,7 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
 
     drop(inference_tree);
 
-    for DisplayInterval { start, end, depth } in intervals {
+    for &DisplayInterval { start, end, depth } in &intervals {
         let size = end - start;
         let rect = Rect::from_x_y_w_h(
             right_half_width - 0.5 * size,

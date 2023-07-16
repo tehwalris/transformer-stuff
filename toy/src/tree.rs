@@ -61,13 +61,13 @@ pub struct InferenceTreeNode {
     pub token: Vec<u8>,
     pub probability: f32,
     pub prediction_id: Option<u32>,
-    pub children: Option<Vec<InferenceTreeNode>>,
+    pub children: Option<InferenceTreeChildren>,
 }
 
 impl InferenceTreeNode {
     pub fn get_child(&self, token_id: TokenId) -> Option<&InferenceTreeNode> {
         if let Some(children) = &self.children {
-            let child = &children[usize::try_from(token_id).unwrap()];
+            let child = &children.nodes[usize::try_from(token_id).unwrap()];
             assert!(child.token_id == token_id);
             Some(child)
         } else {
@@ -77,11 +77,48 @@ impl InferenceTreeNode {
 
     pub fn get_child_mut(&mut self, token_id: TokenId) -> Option<&mut InferenceTreeNode> {
         if let Some(children) = &mut self.children {
-            let child = &mut children[usize::try_from(token_id).unwrap()];
+            let child = &mut children.nodes[usize::try_from(token_id).unwrap()];
             assert!(child.token_id == token_id);
             Some(child)
         } else {
             None
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct InferenceTreeChildren {
+    pub nodes: Vec<InferenceTreeNode>,
+    pub interval_starts: Vec<f32>,
+    pub interval_sizes: Vec<f32>,
+    pub indices_by_interval_size: Vec<usize>, // largest interval size first
+}
+
+impl InferenceTreeChildren {
+    pub fn from_nodes(nodes: Vec<InferenceTreeNode>) -> InferenceTreeChildren {
+        let interval_sizes: Vec<f32> = nodes.iter().map(|node| node.probability).collect();
+        let interval_ends: Vec<f32> = interval_sizes
+            .iter()
+            .scan(0.0, |end, &size| {
+                *end += size;
+                Some(*end)
+            })
+            .collect();
+        let interval_starts = interval_ends
+            .iter()
+            .zip(interval_sizes.iter())
+            .map(|(&end, &size)| end - size)
+            .collect();
+        let indices_by_interval_size = {
+            let mut indices: Vec<usize> = (0..nodes.len()).collect();
+            indices.sort_by(|&i, &j| interval_sizes[j].partial_cmp(&interval_sizes[i]).unwrap());
+            indices
+        };
+        InferenceTreeChildren {
+            nodes,
+            interval_starts,
+            interval_sizes,
+            indices_by_interval_size,
         }
     }
 }

@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     model::{Backend, Model},
-    tree::{InferenceTree, InferenceTreeNode},
+    tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
 use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
@@ -65,17 +65,19 @@ fn try_predict_next(
         *probability /= sum_of_probabilities;
     }
 
-    let children = probabilities
-        .into_iter()
-        .enumerate()
-        .map(|(i, probability)| InferenceTreeNode {
-            token_id: TokenId::try_from(i).unwrap(),
-            token: vocab.token(i).to_vec(),
-            probability: probability,
-            prediction_id: None,
-            children: None,
-        })
-        .collect();
+    let children = InferenceTreeChildren::from_nodes(
+        probabilities
+            .into_iter()
+            .enumerate()
+            .map(|(i, probability)| InferenceTreeNode {
+                token_id: TokenId::try_from(i).unwrap(),
+                token: vocab.token(i).to_vec(),
+                probability: probability,
+                prediction_id: None,
+                children: None,
+            })
+            .collect(),
+    );
 
     {
         let mut inference_tree = inference_tree.lock().unwrap();
@@ -120,15 +122,6 @@ pub fn prediction_thread_main(
             &focused_path,
         );
         if did_predict {
-            let mut string_parts = vec![];
-            let mut print_buffer = TokenUtf8Buffer::new();
-            for &token_id in &focused_path {
-                let token = vocab.token(token_id.try_into().unwrap());
-                if let Some(string_part) = print_buffer.push(token) {
-                    string_parts.push(string_part);
-                }
-            }
-
             println!("Predicted path {:?}", focused_path);
         } else {
             std::thread::sleep(Duration::from_millis(10));
