@@ -193,6 +193,8 @@ fn intervals_from_tree(
         -cursor.y * size,
         cursor.path.len(),
         &mut intervals,
+        -0.5 * window_height - 1.0,
+        0.5 * window_height + 1.0,
     );
     intervals
 }
@@ -204,13 +206,15 @@ fn intervals_from_node(
     start: f32,
     depth: usize,
     output: &mut Vec<DisplayInterval>,
+    output_start: f32,
+    output_end: f32,
 ) {
-    if size < 1.0 {
-        return;
-    }
-
     let end = start + size;
     output.push(DisplayInterval { start, end, depth });
+
+    if size < 5.0 {
+        return;
+    }
 
     if let Some(children) = node.children.as_ref() {
         let mut child_start = start;
@@ -220,15 +224,20 @@ fn intervals_from_node(
                 break;
             }
             let child_size = child.probability * size;
-            intervals_from_node(
-                child,
-                window_height,
-                child_size,
-                child_start,
-                depth + 1,
-                output,
-            );
-            child_start += child_size;
+            let child_end = child_start + child_size;
+            if child_size >= 1.0 && child_end >= output_start && child_start <= output_end {
+                intervals_from_node(
+                    child,
+                    window_height,
+                    child_size,
+                    child_start,
+                    depth + 1,
+                    output,
+                    output_start,
+                    output_end,
+                );
+            }
+            child_start = child_end;
         }
     }
 }
