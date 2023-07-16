@@ -39,18 +39,35 @@ fn try_predict_next(
     inference_tree: &Arc<Mutex<InferenceTree>>,
     focused_path: &[TokenId],
 ) -> bool {
-    let (mut prediction_path, final_node_clone) = {
-        let inference_tree = inference_tree.lock().unwrap();
-        match get_prediction_path(&inference_tree, &focused_path) {
-            Some((prediction_path, final_node)) => {
-                if final_node.children.is_some() {
-                    return false;
-                }
-                (prediction_path, final_node.clone())
+    let (mut prediction_path, final_node_clone, final_node_path) =
+        {
+            let inference_tree = inference_tree.lock().unwrap();
+            match get_prediction_path(&inference_tree, &focused_path) {
+                Some((prediction_path, final_node)) => match &final_node.children {
+                    Some(children) => {
+                        let child_index = children.indices_by_interval_size.iter().take(10).find(
+                            |&&child_index| {
+                                let child = &children.nodes[child_index];
+                                child.children.is_none()
+                            },
+                        );
+                        match child_index {
+                            Some(&child_index) => {
+                                let child = &children.nodes[child_index];
+                                let mut child_path = focused_path.to_vec();
+                                child_path.push(child.token_id);
+                                let mut child_prediction_path = prediction_path.clone();
+                                child_prediction_path.push(final_node.prediction_id.unwrap());
+                                (child_prediction_path, child.clone(), child_path)
+                            }
+                            None => return false,
+                        }
+                    }
+                    None => (prediction_path, final_node.clone(), focused_path.to_vec()),
+                },
+                None => return false,
             }
-            None => return false,
-        }
-    };
+        };
 
     let prediction_id = model.next_i();
     prediction_path.push(prediction_id);
@@ -83,7 +100,7 @@ fn try_predict_next(
 
     {
         let mut inference_tree = inference_tree.lock().unwrap();
-        let final_node = inference_tree.get_node_mut(focused_path);
+        let final_node = inference_tree.get_node_mut(&final_node_path);
 
         if final_node.prediction_id.is_some() || final_node.children.is_some() {
             eprintln!("WARNING: duplicate prediction");
