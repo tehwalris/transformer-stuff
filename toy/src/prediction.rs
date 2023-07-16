@@ -9,7 +9,7 @@ use crate::{
     tree::{InferenceTree, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
-use llm_base::TokenId;
+use llm_base::{TokenId, TokenUtf8Buffer};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -117,7 +117,17 @@ pub fn prediction_thread_main(
             &focused_path,
         );
         if did_predict {
+            let mut string_parts = vec![];
+            let mut print_buffer = TokenUtf8Buffer::new();
+            for &token_id in &focused_path {
+                let token = vocab.token(token_id.try_into().unwrap());
+                if let Some(string_part) = print_buffer.push(token) {
+                    string_parts.push(string_part);
+                }
+            }
+
             println!("Predicted path {:?}", focused_path);
+            println!("{}", string_parts.join(""));
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
