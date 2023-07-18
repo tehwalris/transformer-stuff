@@ -181,7 +181,6 @@ fn intervals_from_tree<'a>(
         cursor.path.len(),
         &mut intervals,
     );
-    intervals.reverse();
     intervals_from_node(
         nodes_from_root.last().unwrap(),
         window_wh.y as f64,
@@ -191,7 +190,9 @@ fn intervals_from_tree<'a>(
         &mut intervals,
         (-0.5 * window_wh.y - 1.0) as f64,
         (0.5 * window_wh.y + 1.0) as f64,
+        None,
     );
+    intervals.sort_by_key(|interval| interval.depth);
     intervals
 }
 
@@ -223,7 +224,22 @@ fn intervals_from_parent_nodes<'a>(
         node: parent,
     });
 
-    if (parent_size as f32) < window_wh.x || (parent_size as f32) < window_wh.y {
+    intervals_from_node(
+        parent,
+        window_wh.y as f64,
+        parent_size,
+        parent_start,
+        parent_depth,
+        output,
+        (-0.5 * window_wh.y - 1.0) as f64,
+        (0.5 * window_wh.y + 1.0) as f64,
+        Some(node_index),
+    );
+
+    let parent_horizontally_covers_window = (parent_size as f32) > window_wh.x;
+    let parent_vertically_covers_window =
+        parent_start < 0.0 && parent_start + parent_size > window_wh.y as f64;
+    if !parent_horizontally_covers_window || !parent_vertically_covers_window {
         intervals_from_parent_nodes(
             &nodes[..nodes.len() - 1],
             &path[..nodes.len() - 1],
@@ -245,6 +261,7 @@ fn intervals_from_node<'a>(
     output: &mut Vec<DisplayInterval<'a>>,
     output_start: f64,
     output_end: f64,
+    skip_child_index: Option<usize>,
 ) {
     let end = start + size;
     output.push(DisplayInterval {
@@ -260,6 +277,9 @@ fn intervals_from_node<'a>(
 
     if let Some(children) = node.children.as_ref() {
         for &child_index in &children.indices_by_interval_size {
+            if Some(child_index) == skip_child_index {
+                continue;
+            }
             let child_size = children.interval_sizes[child_index] * size;
             if child_size < 1.0 {
                 break;
@@ -276,6 +296,7 @@ fn intervals_from_node<'a>(
                     output,
                     output_start,
                     output_end,
+                    None,
                 );
             }
         }
