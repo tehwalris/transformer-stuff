@@ -54,6 +54,31 @@ fn get_prediction_path<'a>(
     None
 }
 
+fn children_from_logits(logits: &[f32], vocab: &Vocabulary) -> InferenceTreeChildren {
+    let mut probabilities: Vec<f64> = logits
+        .iter()
+        .map(|&log_probability| (log_probability as f64).exp())
+        .collect();
+    let sum_of_probabilities: f64 = probabilities.iter().sum();
+    for probability in probabilities.iter_mut() {
+        *probability /= sum_of_probabilities;
+    }
+
+    InferenceTreeChildren::from_nodes(
+        probabilities
+            .into_iter()
+            .enumerate()
+            .map(|(i, probability)| InferenceTreeNode {
+                token_id: TokenId::try_from(i).unwrap(),
+                token: vocab.token(i).to_vec(),
+                probability,
+                prediction_id: None,
+                children: None,
+            })
+            .collect(),
+    )
+}
+
 fn try_predict_next(
     model: &mut Model,
     vocab: &Vocabulary,
@@ -75,30 +100,8 @@ fn try_predict_next(
     prediction_path.push(prediction_id);
 
     let hidden_in = vocab_embeddings.get_embedding(target_node_clone.token_id.try_into().unwrap());
-    let final_out = model.predict(&hidden_in, &prediction_path);
-
-    let mut probabilities: Vec<f64> = final_out
-        .iter()
-        .map(|&log_probability| (log_probability as f64).exp())
-        .collect();
-    let sum_of_probabilities: f64 = probabilities.iter().sum();
-    for probability in probabilities.iter_mut() {
-        *probability /= sum_of_probabilities;
-    }
-
-    let children = InferenceTreeChildren::from_nodes(
-        probabilities
-            .into_iter()
-            .enumerate()
-            .map(|(i, probability)| InferenceTreeNode {
-                token_id: TokenId::try_from(i).unwrap(),
-                token: vocab.token(i).to_vec(),
-                probability,
-                prediction_id: None,
-                children: None,
-            })
-            .collect(),
-    );
+    let logits = model.predict(&hidden_in, &prediction_path);
+    let children = children_from_logits(&logits, vocab);
 
     {
         let mut inference_tree = inference_tree.lock().unwrap();
