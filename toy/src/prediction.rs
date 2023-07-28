@@ -271,10 +271,20 @@ pub fn prediction_thread_main(
     println!("Explore regex: {}", explore_regex);
     let explore_regex = Regex::new(&explore_regex).unwrap();
 
+    let prefix = " Philippe (12:23 PM):\nSo when can you come?\nKris (12:25 PM):\n";
+    assert!(potentially_matches(&explore_regex, prefix) == PotentialMatch::CanMatch);
+
     println!("Loading model...");
     let (vocab, vocab_embeddings) = load_vocab(&model_path);
     let mut model = Model::load(&model_path, &layer_backends, true);
     println!("Done loading model");
+
+    let tokenized_prefix: Vec<TokenId> = vocab
+        .tokenize(&prefix, true)
+        .unwrap()
+        .into_iter()
+        .map(|(_, token_id)| token_id)
+        .collect();
 
     let mut priority_queue = BinaryHeap::new();
     let bos_token_id = 1;
@@ -353,11 +363,20 @@ pub fn prediction_thread_main(
                     continue;
                 }
                 child_item.approx_words = child_item.text.split_whitespace().count();
-                if potentially_matches(&explore_regex, &child_item.text)
-                    != PotentialMatch::CanNotMatch
+                if child_item
+                    .path
+                    .iter()
+                    .zip(&tokenized_prefix)
+                    .any(|(&a, &b)| a != b)
                 {
-                    priority_queue.push(child_item);
+                    continue;
                 }
+                if potentially_matches(&explore_regex, &child_item.text)
+                    == PotentialMatch::CanNotMatch
+                {
+                    continue;
+                }
+                priority_queue.push(child_item);
             }
         }
     }
