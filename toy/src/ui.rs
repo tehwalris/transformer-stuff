@@ -377,7 +377,8 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
     draw.text(&cursor_text)
         .xy(text_rect.xy())
         .wh(text_rect.wh())
-        .left_justify()
+        .font_size(40)
+        .right_justify()
         .align_text_bottom()
         .color(WHITE);
 
@@ -386,9 +387,13 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
         if interval.depth != model.cursor.path.len() + 1 {
             continue;
         }
-        if interval.end - interval.start < 20.0 {
+        let min_font_size = 20;
+        let max_font_size = 50;
+        let interval_height = interval.end - interval.start;
+        if interval_height < min_font_size as f32 {
             continue;
         }
+        let font_size = (interval_height as u32).clamp(min_font_size, max_font_size);
         if let Ok(text) = String::from_utf8(interval.node.token.clone()) {
             draw.text(&text)
                 .x_y(
@@ -399,6 +404,7 @@ fn view(app: &App, model: &UIModel, frame: Frame) {
                     0.5 * window_rect.w() - right_half_width,
                     interval.end - interval.start,
                 )
+                .font_size(font_size)
                 .left_justify()
                 .color(if text.starts_with(' ') { RED } else { WHITE });
         }
