@@ -103,6 +103,7 @@
     "cuda",
     "ggml",
     "Hyperparams",
+    "logits",
     "silu",
     "softmax"
   ]
