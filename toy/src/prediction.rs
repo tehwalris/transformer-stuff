@@ -1,5 +1,6 @@
 use std::{
     collections::BinaryHeap,
+    io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -11,6 +12,7 @@ use crate::{
 };
 
 use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
+use nannou::winit::platform::unix::x11::ffi::ClipByChildren;
 use regex_automata::{
     dfa::{regex::Regex, Automaton},
     Input,
@@ -217,12 +219,19 @@ struct ExplorationItem {
     log_probability: f64,
     path: Vec<TokenId>,
     text: String,
-    text_tail: TokenUtf8Buffer,
+    text_tail: Option<TokenUtf8Buffer>,
+    approx_words: usize,
+}
+
+impl ExplorationItem {
+    fn sort_key(&self) -> f64 {
+        self.log_probability / (self.approx_words as f64).sqrt()
+    }
 }
 
 impl PartialOrd for ExplorationItem {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.log_probability.partial_cmp(&other.log_probability)
+        self.sort_key().partial_cmp(&other.sort_key())
     }
 }
 
@@ -247,15 +256,18 @@ pub fn prediction_thread_main(
         layer_backends.push(Backend::Hip);
     }
 
-    let mut explore_regex = r"^(?i) ".to_string();
+    let mut explore_regex = r"^ ".to_string();
+    explore_regex.push_str(r"Philippe \(12:23 PM\):\n");
+    explore_regex.push_str(r"so when can you come\?\n");
+    explore_regex.push_str(r"Kris \(12:25 PM\):\n");
     for (i, letter) in "icdtawatsomaw".chars().enumerate() {
         if i > 0 {
-            explore_regex.push_str(r"[.,;!?\- ()]");
+            explore_regex.push_str(r" ");
         }
         explore_regex.push(letter);
         explore_regex.push_str(r"[a-z']*");
     }
-    explore_regex.push_str(r"[.!?]$");
+    explore_regex.push_str(r"[.]$");
     println!("Explore regex: {}", explore_regex);
     let explore_regex = Regex::new(&explore_regex).unwrap();
 
@@ -270,11 +282,13 @@ pub fn prediction_thread_main(
         log_probability: 0.0,
         path: vec![bos_token_id],
         text: "".to_string(),
-        text_tail: TokenUtf8Buffer::new(),
+        text_tail: None,
+        approx_words: 0,
     });
     while let Some(item) = priority_queue.pop() {
-        if potentially_matches(&explore_regex, &item.text) == PotentialMatch::DidMatch {
-            println!("Found match: {}", item.text);
+        if item.text.ends_with(".") {
+            println!("");
+            println!("Found match: {}", item.text.lines().last().unwrap());
             continue;
         }
 
@@ -285,12 +299,16 @@ pub fn prediction_thread_main(
             clear_most_cache(&mut model, &mut inference_tree, &item.path);
         }
 
-        println!(
-            "Log probability: {}, Depth: {}\n{}",
-            item.log_probability,
-            item.path.len(),
-            item.text
-        );
+        // println!(
+        //     "Sort key: {}, log probability: {}, depth: {}, has tail: {}\n{}",
+        //     item.sort_key(),
+        //     item.log_probability,
+        //     item.path.len(),
+        //     item.text_tail.is_some(),
+        //     item.text.lines().last().unwrap_or_default()
+        // );
+        print!(".");
+        std::io::stdout().flush().unwrap();
 
         let mut node = inference_tree.root_mut();
         assert_eq!(item.path[0], node.token_id);
@@ -326,10 +344,17 @@ pub fn prediction_thread_main(
                 let mut child_item = item.clone();
                 child_item.log_probability += child.probability.ln() as f64;
                 child_item.path.push(child.token_id);
-                if let Some(tail) = child_item.text_tail.push(&child.token) {
+                let mut tail_buffer = child_item.text_tail.take().unwrap_or_default();
+                if let Some(tail) = tail_buffer.push(&child.token) {
                     child_item.text += &tail;
                 }
-                if potentially_matches(&explore_regex, &child_item.text) == PotentialMatch::CanMatch
+                if tail_buffer != TokenUtf8Buffer::default() {
+                    // HACK We don't want to explore paths with tokens that are not valid UTF-8 by themselves, because they usually are not interesting.
+                    continue;
+                }
+                child_item.approx_words = child_item.text.split_whitespace().count();
+                if potentially_matches(&explore_regex, &child_item.text)
+                    != PotentialMatch::CanNotMatch
                 {
                     priority_queue.push(child_item);
                 }
