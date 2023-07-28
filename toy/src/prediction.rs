@@ -247,18 +247,6 @@ pub fn prediction_thread_main(
             item.text
         );
 
-        let standard_children = Some(InferenceTreeChildren::from_nodes(
-            (0..model.n_vocab)
-                .map(|i| InferenceTreeNode {
-                    token_id: TokenId::try_from(i).unwrap(),
-                    token: vocab.token(i).to_vec(),
-                    probability: 0.0, // HACK
-                    prediction_id: None,
-                    children: None,
-                })
-                .collect(),
-        ));
-
         let mut node = inference_tree.root_mut();
         assert_eq!(item.path[0], node.token_id);
         let mut prediction_path = vec![];
@@ -270,11 +258,11 @@ pub fn prediction_thread_main(
                 None => {
                     let prediction_id = model.next_i();
                     node.prediction_id = Some(prediction_id);
-                    node.children = standard_children.clone();
                     prediction_path.push(prediction_id);
                     let hidden_in =
                         vocab_embeddings.get_embedding(node.token_id.try_into().unwrap());
-                    let _recomputed_final_out = model.predict(&hidden_in, &prediction_path);
+                    let logits = model.predict(&hidden_in, &prediction_path);
+                    node.children = Some(children_from_logits(&logits, &vocab));
                 }
             }
             node = &mut node.children.as_mut().unwrap().nodes[next_token_id as usize];
@@ -284,16 +272,16 @@ pub fn prediction_thread_main(
             assert!(node.prediction_id.is_none());
             let prediction_id = model.next_i();
             node.prediction_id = Some(prediction_id);
-            node.children = standard_children.clone();
             prediction_path.push(prediction_id);
             let hidden_in = vocab_embeddings.get_embedding(node.token_id.try_into().unwrap());
-            let final_out = model.predict(&hidden_in, &prediction_path);
+            let logits = model.predict(&hidden_in, &prediction_path);
+            node.children = Some(children_from_logits(&logits, &vocab));
 
-            for (child_i, child_log_probability) in final_out.into_iter().enumerate() {
+            for child in &node.children.as_ref().unwrap().nodes {
                 let mut child_item = item.clone();
-                child_item.log_probability += child_log_probability as f64;
-                child_item.path.push(child_i.try_into().unwrap());
-                if let Some(tail) = child_item.text_tail.push(vocab.token(child_i)) {
+                child_item.log_probability += child.probability.ln() as f64;
+                child_item.path.push(child.token_id);
+                if let Some(tail) = child_item.text_tail.push(&child.token) {
                     child_item.text += &tail;
                 }
                 priority_queue.push(child_item);
