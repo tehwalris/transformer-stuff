@@ -207,6 +207,7 @@ fn potentially_matches(pattern: &Regex, input: &str) -> PotentialMatch {
             return PotentialMatch::CanNotMatch;
         }
     }
+    state = dfa.next_eoi_state(state);
     if dfa.is_match_state(state) {
         PotentialMatch::DidMatch
     } else {
@@ -221,11 +222,12 @@ struct ExplorationItem {
     text: String,
     text_tail: Option<TokenUtf8Buffer>,
     approx_words: usize,
+    good_tokens: usize,
 }
 
 impl ExplorationItem {
     fn sort_key(&self) -> f64 {
-        self.log_probability * (self.path.len() as f64) / (self.approx_words as f64).powf(1.3)
+        self.log_probability + 5.0 * (self.good_tokens as f64)
     }
 }
 
@@ -258,9 +260,9 @@ pub fn prediction_thread_main(
 
     let mut explore_regex = r"^ ".to_string();
     explore_regex.push_str(r"Philippe \(12:23 PM\):\n");
-    explore_regex.push_str(r"So when can you come\?\n");
+    explore_regex.push_str(r"Want to go for a beer today\?\n");
     explore_regex.push_str(r"Kris \(12:25 PM\):\n");
-    for (i, letter) in "icdtawatsomaw".chars().enumerate() {
+    for (i, letter) in "indtmr".chars().enumerate() {
         if i > 0 {
             explore_regex.push_str(r"[.,;!?\- ()] ?");
         }
@@ -271,7 +273,7 @@ pub fn prediction_thread_main(
     println!("Explore regex: {}", explore_regex);
     let explore_regex = Regex::new(&explore_regex).unwrap();
 
-    let prefix = " Philippe (12:23 PM):\nSo when can you come?\nKris (12:25 PM):\n";
+    let prefix = " Philippe (12:23 PM):\nWant to go for a beer today?\nKris (12:25 PM):\n";
     assert!(potentially_matches(&explore_regex, prefix) == PotentialMatch::CanMatch);
 
     println!("Loading model...");
@@ -294,11 +296,16 @@ pub fn prediction_thread_main(
         text: "".to_string(),
         text_tail: None,
         approx_words: 0,
+        good_tokens: 0,
     });
     while let Some(item) = priority_queue.pop() {
         if explore_regex.is_match(&item.text) {
             println!("");
-            println!("Found match: {}", item.text.lines().last().unwrap());
+            println!(
+                "Found match ({}): {}",
+                item.log_probability,
+                item.text.strip_prefix(prefix).unwrap().trim()
+            );
             continue;
         }
 
@@ -309,16 +316,16 @@ pub fn prediction_thread_main(
             clear_most_cache(&mut model, &mut inference_tree, &item.path);
         }
 
-        println!(
-            "Sort key: {}, log probability: {}, depth: {}, has tail: {}\n{}",
-            item.sort_key(),
-            item.log_probability,
-            item.path.len(),
-            item.text_tail.is_some(),
-            item.text.lines().last().unwrap_or_default()
-        );
-        // print!(".");
-        // std::io::stdout().flush().unwrap();
+        // println!(
+        //     "Sort key: {:?}, log probability: {}, depth: {}, has tail: {}\n{}",
+        //     item.sort_key(),
+        //     item.log_probability,
+        //     item.path.len(),
+        //     item.text_tail.is_some(),
+        //     item.text.lines().last().unwrap_or_default()
+        // );
+        print!(".");
+        std::io::stdout().flush().unwrap();
 
         let mut node = inference_tree.root_mut();
         assert_eq!(item.path[0], node.token_id);
@@ -349,11 +356,18 @@ pub fn prediction_thread_main(
             let hidden_in = vocab_embeddings.get_embedding(node.token_id.try_into().unwrap());
             let logits = model.predict(&hidden_in, &prediction_path);
             node.children = Some(children_from_logits(&logits, &vocab));
+            let children = node.children.as_ref().unwrap();
+
+            let high_probability = children.nodes[children.indices_by_interval_size[3]].probability;
 
             for child in &node.children.as_ref().unwrap().nodes {
                 let mut child_item = item.clone();
                 child_item.log_probability += child.probability.ln() as f64;
                 child_item.path.push(child.token_id);
+                if child.probability >= high_probability && child.token.starts_with(" ".as_bytes())
+                {
+                    child_item.good_tokens += 1;
+                }
                 let mut tail_buffer = child_item.text_tail.take().unwrap_or_default();
                 if let Some(tail) = tail_buffer.push(&child.token) {
                     child_item.text += &tail;
