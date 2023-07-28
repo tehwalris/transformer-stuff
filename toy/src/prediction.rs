@@ -1,4 +1,5 @@
 use std::{
+    collections::BinaryHeap,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -9,7 +10,7 @@ use crate::{
     tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
-use llm_base::{TokenId, Vocabulary};
+use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -180,6 +181,28 @@ fn clear_most_cache(
     map_prediction_ids(inference_tree.root_mut(), &new_ids_by_old_id, true);
 }
 
+#[derive(PartialEq, Clone)]
+struct ExplorationItem {
+    log_probability: f64,
+    path: Vec<TokenId>,
+    text: String,
+    text_tail: TokenUtf8Buffer,
+}
+
+impl PartialOrd for ExplorationItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.log_probability.partial_cmp(&other.log_probability)
+    }
+}
+
+impl Eq for ExplorationItem {}
+
+impl Ord for ExplorationItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
 pub fn prediction_thread_main(
     model_path: PathBuf,
     inference_tree: Arc<Mutex<InferenceTree>>,
@@ -198,29 +221,80 @@ pub fn prediction_thread_main(
     let mut model = Model::load(&model_path, &layer_backends, true);
     println!("Done loading model");
 
-    loop {
-        let focused_path = focused_path.lock().unwrap().clone();
+    let mut priority_queue = BinaryHeap::new();
+    let bos_token_id = 1;
+    priority_queue.push(ExplorationItem {
+        log_probability: 0.0,
+        path: vec![bos_token_id],
+        text: "".to_string(),
+        text_tail: TokenUtf8Buffer::new(),
+    });
+    while let Some(item) = priority_queue.pop() {
+        let mut inference_tree = inference_tree.lock().unwrap();
 
         if model.next_i() as f32 / model.n_cache as f32 > 0.9 {
             println!("Clearing most cache to free space");
-            clear_most_cache(
-                &mut model,
-                &mut inference_tree.lock().unwrap(),
-                &focused_path,
-            );
+            clear_most_cache(&mut model, &mut inference_tree, &item.path);
         }
 
-        let did_predict = try_predict_next(
-            &mut model,
-            &vocab,
-            &vocab_embeddings,
-            &inference_tree,
-            &focused_path,
+        println!(
+            "Log probability: {}, Depth: {}\n{}",
+            item.log_probability,
+            item.path.len(),
+            item.text
         );
-        if did_predict {
-            println!("Predicted path {:?}", focused_path);
-        } else {
-            std::thread::sleep(Duration::from_millis(10));
+
+        let standard_children = Some(InferenceTreeChildren::from_nodes(
+            (0..model.n_vocab)
+                .map(|i| InferenceTreeNode {
+                    token_id: TokenId::try_from(i).unwrap(),
+                    token: vocab.token(i).to_vec(),
+                    probability: 0.0, // HACK
+                    prediction_id: None,
+                    children: None,
+                })
+                .collect(),
+        ));
+
+        let mut node = inference_tree.root_mut();
+        assert_eq!(item.path[0], node.token_id);
+        let mut prediction_path = vec![];
+        for &next_token_id in &item.path[1..] {
+            match node.prediction_id {
+                Some(prediction_id) => {
+                    prediction_path.push(prediction_id);
+                }
+                None => {
+                    let prediction_id = model.next_i();
+                    node.prediction_id = Some(prediction_id);
+                    node.children = standard_children.clone();
+                    prediction_path.push(prediction_id);
+                    let hidden_in =
+                        vocab_embeddings.get_embedding(node.token_id.try_into().unwrap());
+                    let _recomputed_final_out = model.predict(&hidden_in, &prediction_path);
+                }
+            }
+            node = &mut node.children.as_mut().unwrap().nodes[next_token_id as usize];
+        }
+
+        {
+            assert!(node.prediction_id.is_none());
+            let prediction_id = model.next_i();
+            node.prediction_id = Some(prediction_id);
+            node.children = standard_children.clone();
+            prediction_path.push(prediction_id);
+            let hidden_in = vocab_embeddings.get_embedding(node.token_id.try_into().unwrap());
+            let final_out = model.predict(&hidden_in, &prediction_path);
+
+            for (child_i, child_log_probability) in final_out.into_iter().enumerate() {
+                let mut child_item = item.clone();
+                child_item.log_probability += child_log_probability as f64;
+                child_item.path.push(child_i.try_into().unwrap());
+                if let Some(tail) = child_item.text_tail.push(vocab.token(child_i)) {
+                    child_item.text += &tail;
+                }
+                priority_queue.push(child_item);
+            }
         }
     }
 }
