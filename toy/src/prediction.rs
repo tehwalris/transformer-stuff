@@ -2,7 +2,6 @@ use std::{
     collections::BinaryHeap,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use crate::{
@@ -10,7 +9,12 @@ use crate::{
     tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
+
 use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
+use regex_automata::{
+    dfa::{regex::Regex, Automaton},
+    Input,
+};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -184,6 +188,30 @@ fn clear_most_cache(
     map_prediction_ids(inference_tree.root_mut(), &new_ids_by_old_id, true);
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PotentialMatch {
+    DidMatch,
+    CanMatch,
+    CanNotMatch,
+}
+
+fn potentially_matches(pattern: &Regex, input: &str) -> PotentialMatch {
+    let input_bytes = input.as_bytes();
+    let dfa = pattern.forward();
+    let mut state = dfa.start_state_forward(&Input::new(input_bytes)).unwrap();
+    for &byte in input_bytes {
+        state = dfa.next_state(state, byte);
+        if dfa.is_dead_state(state) {
+            return PotentialMatch::CanNotMatch;
+        }
+    }
+    if dfa.is_match_state(state) {
+        PotentialMatch::DidMatch
+    } else {
+        PotentialMatch::CanMatch
+    }
+}
+
 #[derive(PartialEq, Clone)]
 struct ExplorationItem {
     log_probability: f64,
@@ -219,6 +247,18 @@ pub fn prediction_thread_main(
         layer_backends.push(Backend::Hip);
     }
 
+    let mut explore_regex = r"^(?i) ".to_string();
+    for (i, letter) in "icdtawatsomaw".chars().enumerate() {
+        if i > 0 {
+            explore_regex.push_str(r"[.,;!?\- ()]");
+        }
+        explore_regex.push(letter);
+        explore_regex.push_str(r"[a-z']*");
+    }
+    explore_regex.push_str(r"[.!?]$");
+    println!("Explore regex: {}", explore_regex);
+    let explore_regex = Regex::new(&explore_regex).unwrap();
+
     println!("Loading model...");
     let (vocab, vocab_embeddings) = load_vocab(&model_path);
     let mut model = Model::load(&model_path, &layer_backends, true);
@@ -233,6 +273,11 @@ pub fn prediction_thread_main(
         text_tail: TokenUtf8Buffer::new(),
     });
     while let Some(item) = priority_queue.pop() {
+        if potentially_matches(&explore_regex, &item.text) == PotentialMatch::DidMatch {
+            println!("Found match: {}", item.text);
+            continue;
+        }
+
         let mut inference_tree = inference_tree.lock().unwrap();
 
         if model.next_i() as f32 / model.n_cache as f32 > 0.9 {
@@ -284,7 +329,10 @@ pub fn prediction_thread_main(
                 if let Some(tail) = child_item.text_tail.push(&child.token) {
                     child_item.text += &tail;
                 }
-                priority_queue.push(child_item);
+                if potentially_matches(&explore_regex, &child_item.text) == PotentialMatch::CanMatch
+                {
+                    priority_queue.push(child_item);
+                }
             }
         }
     }
