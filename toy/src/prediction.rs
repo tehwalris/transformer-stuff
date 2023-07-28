@@ -1,4 +1,5 @@
 use std::{
+    arch::x86_64::_MM_FROUND_FLOOR,
     collections::BinaryHeap,
     io::Write,
     path::PathBuf,
@@ -258,11 +259,11 @@ pub fn prediction_thread_main(
         layer_backends.push(Backend::Hip);
     }
 
-    let mut explore_regex = r"^ ".to_string();
-    explore_regex.push_str(r"Philippe \(12:23 PM\):\n");
-    explore_regex.push_str(r"Want to go for a beer today\?\n");
-    explore_regex.push_str(r"Kris \(12:25 PM\):\n");
-    for (i, letter) in "indtmr".chars().enumerate() {
+    let prefix = " Philippe (12:23 PM):\nWhat were they all laughing about?\nKris (12:25 PM):\n";
+    assert!(prefix.starts_with(" "));
+    let mut explore_regex = r"^".to_string();
+    explore_regex.push_str(&regex::escape(prefix));
+    for (i, letter) in "cetat".chars().enumerate() {
         if i > 0 {
             explore_regex.push_str(r"[.,;!?\- ()] ?");
         }
@@ -272,8 +273,6 @@ pub fn prediction_thread_main(
     explore_regex.push_str(r"[.!?]$");
     println!("Explore regex: {}", explore_regex);
     let explore_regex = Regex::new(&explore_regex).unwrap();
-
-    let prefix = " Philippe (12:23 PM):\nWant to go for a beer today?\nKris (12:25 PM):\n";
     assert!(potentially_matches(&explore_regex, prefix) == PotentialMatch::CanMatch);
 
     println!("Loading model...");
@@ -298,8 +297,10 @@ pub fn prediction_thread_main(
         approx_words: 0,
         good_tokens: 0,
     });
+    let mut found_any_matches = false;
     while let Some(item) = priority_queue.pop() {
         if explore_regex.is_match(&item.text) {
+            found_any_matches = true;
             println!("");
             println!(
                 "Found match ({}): {}",
@@ -312,20 +313,24 @@ pub fn prediction_thread_main(
         let mut inference_tree = inference_tree.lock().unwrap();
 
         if model.next_i() as f32 / model.n_cache as f32 > 0.9 {
-            println!("Clearing most cache to free space");
-            clear_most_cache(&mut model, &mut inference_tree, &item.path);
+            println!("Clearing cache to free space");
+            model.retain(&[]);
+            *inference_tree = InferenceTree::new(bos_token_id);
         }
 
-        // println!(
-        //     "Sort key: {:?}, log probability: {}, depth: {}, has tail: {}\n{}",
-        //     item.sort_key(),
-        //     item.log_probability,
-        //     item.path.len(),
-        //     item.text_tail.is_some(),
-        //     item.text.lines().last().unwrap_or_default()
-        // );
-        print!(".");
-        std::io::stdout().flush().unwrap();
+        if found_any_matches {
+            print!(".");
+            std::io::stdout().flush().unwrap();
+        } else {
+            println!(
+                "Sort key: {:?}, log probability: {}, depth: {}, has tail: {}\n{}",
+                item.sort_key(),
+                item.log_probability,
+                item.path.len(),
+                item.text_tail.is_some(),
+                item.text.lines().last().unwrap_or_default()
+            );
+        }
 
         let mut node = inference_tree.root_mut();
         assert_eq!(item.path[0], node.token_id);
@@ -358,7 +363,8 @@ pub fn prediction_thread_main(
             node.children = Some(children_from_logits(&logits, &vocab));
             let children = node.children.as_ref().unwrap();
 
-            let high_probability = children.nodes[children.indices_by_interval_size[3]].probability;
+            let high_probability =
+                children.nodes[children.indices_by_interval_size[10]].probability;
 
             for child in &node.children.as_ref().unwrap().nodes {
                 let mut child_item = item.clone();
