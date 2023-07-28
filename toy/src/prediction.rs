@@ -225,7 +225,7 @@ struct ExplorationItem {
 
 impl ExplorationItem {
     fn sort_key(&self) -> f64 {
-        self.log_probability / (self.approx_words as f64).sqrt()
+        self.log_probability * (self.path.len() as f64) / (self.approx_words as f64).powf(1.3)
     }
 }
 
@@ -258,16 +258,16 @@ pub fn prediction_thread_main(
 
     let mut explore_regex = r"^ ".to_string();
     explore_regex.push_str(r"Philippe \(12:23 PM\):\n");
-    explore_regex.push_str(r"so when can you come\?\n");
+    explore_regex.push_str(r"So when can you come\?\n");
     explore_regex.push_str(r"Kris \(12:25 PM\):\n");
     for (i, letter) in "icdtawatsomaw".chars().enumerate() {
         if i > 0 {
-            explore_regex.push_str(r" ");
+            explore_regex.push_str(r"[.,;!?\- ()] ?");
         }
-        explore_regex.push(letter);
+        explore_regex.push_str(&format!(r"[{}{}]", letter, letter.to_uppercase()));
         explore_regex.push_str(r"[a-z']*");
     }
-    explore_regex.push_str(r"[.]$");
+    explore_regex.push_str(r"[.!?]$");
     println!("Explore regex: {}", explore_regex);
     let explore_regex = Regex::new(&explore_regex).unwrap();
 
@@ -286,7 +286,7 @@ pub fn prediction_thread_main(
         approx_words: 0,
     });
     while let Some(item) = priority_queue.pop() {
-        if item.text.ends_with(".") {
+        if explore_regex.is_match(&item.text) {
             println!("");
             println!("Found match: {}", item.text.lines().last().unwrap());
             continue;
@@ -299,16 +299,16 @@ pub fn prediction_thread_main(
             clear_most_cache(&mut model, &mut inference_tree, &item.path);
         }
 
-        // println!(
-        //     "Sort key: {}, log probability: {}, depth: {}, has tail: {}\n{}",
-        //     item.sort_key(),
-        //     item.log_probability,
-        //     item.path.len(),
-        //     item.text_tail.is_some(),
-        //     item.text.lines().last().unwrap_or_default()
-        // );
-        print!(".");
-        std::io::stdout().flush().unwrap();
+        println!(
+            "Sort key: {}, log probability: {}, depth: {}, has tail: {}\n{}",
+            item.sort_key(),
+            item.log_probability,
+            item.path.len(),
+            item.text_tail.is_some(),
+            item.text.lines().last().unwrap_or_default()
+        );
+        // print!(".");
+        // std::io::stdout().flush().unwrap();
 
         let mut node = inference_tree.root_mut();
         assert_eq!(item.path[0], node.token_id);
