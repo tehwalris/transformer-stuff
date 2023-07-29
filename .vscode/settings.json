@@ -104,6 +104,8 @@
     "ggml",
     "Hyperparams",
     "logits",
+    "memmap",
+    "safetensors",
     "silu",
     "softmax"
   ]

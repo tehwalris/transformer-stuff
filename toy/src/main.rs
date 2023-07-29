@@ -9,13 +9,39 @@ mod vocab;
 use std::{
     fs::File,
     io::BufWriter,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+use memmap2::MmapOptions;
+use safetensors::SafeTensors;
 use tracing_subscriber::prelude::*;
 
 use crate::{prediction::prediction_thread_main, tree::InferenceTree};
+
+fn test_thing(path: impl AsRef<Path>) {
+    let file = File::open(path).unwrap();
+    let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
+    let tensors = SafeTensors::deserialize(&buffer).unwrap();
+
+    let mut names: Vec<_> = tensors
+        .names()
+        .iter()
+        .filter(|name| name.starts_with("model.layers.17."))
+        .cloned()
+        .collect();
+    names.sort();
+    for name in names {
+        let tensor = tensors.tensor(name).unwrap();
+        println!(
+            "{}: {:?} {:?} {:?}",
+            name,
+            tensor.shape(),
+            tensor.dtype(),
+            &tensor.data()[..8],
+        );
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -31,6 +57,10 @@ fn main() {
         .include_args(true)
         .build();
     tracing_subscriber::registry().with(chrome_layer).init();
+
+    test_thing(model_path);
+
+    return;
 
     let bos_token_id = 1;
     let inference_tree = Arc::new(Mutex::new(InferenceTree::new(bos_token_id)));
