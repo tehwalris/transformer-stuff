@@ -1,31 +1,25 @@
 {
-    "configurations": [
-        {
-            "name": "Linux",
-            "includePath": [
-                "${workspaceFolder}/**",
-                "/nix/store/04dgbzil2111nnwp74ckvnj1r7j36c3c-cudatoolkit-11.7.0/include/"
-            ],
-            "defines": [
-                "__CUDACC__",
-                "__CUDA_ARCH__=610",
-                "__HIP_PLATFORM_AMD__",
-                "__clang__",
-                "__HIP__",
-                "_OPENMP=1"
-            ],
-            "compilerPath": "/nix/store/1i2jj3n47dhzpi6z63jv7sbabnc4wk0v-rocm-llvm-clang-wrapper-5.4.4/bin/clang",
-            "cStandard": "gnu17",
-            "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-clang-x64",
-            "compilerArgs": [
-                "-O3",
-                "-march=native",
-                "-mavx2",
-                "-mfma",
-                "-ffast-math"
-            ]
-        }
-    ],
-    "version": 4
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "/nix/store/2cpg3gv79ai7gd2japx5c82scyzi6q1h-cudatoolkit-11.7.0/include/"
+      ],
+      "defines": [
+        "__CUDACC__",
+        "__CUDA_ARCH__=610",
+        "__HIP_PLATFORM_AMD__",
+        "__clang__",
+        "__HIP__",
+        "_OPENMP=1"
+      ],
+      "compilerPath": "/nix/store/7vl9iak8svrhl6chv4mv55fxfah5l6an-rocm-llvm-clang-wrapper-5.4.4/bin/clang",
+      "cStandard": "gnu17",
+      "cppStandard": "gnu++17",
+      "intelliSenseMode": "linux-clang-x64",
+      "compilerArgs": ["-O3", "-march=native", "-mavx2", "-mfma", "-ffast-math"]
+    }
+  ],
+  "version": 4
 }
