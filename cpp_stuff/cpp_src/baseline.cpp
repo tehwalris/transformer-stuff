@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cmath>
 #include <algorithm>
+#include <immintrin.h>
 #include "baseline.h"
 
 namespace cml
@@ -45,6 +46,57 @@ namespace cml
         sum += va[i] * vb[i];
       }
       return sum;
+    }
+
+    void fp32s_from_fp16s(uint32_t n, const uint16_t *in, float *out)
+    {
+      assert(n % 16 == 0); // TODO: support non-multiple of 16
+      for (uint32_t i = 0; i < n; i += 16)
+      {
+        __m256i v_f16 = _mm256_load_si256((__m256i *)(in + i));
+        __m128i v_f16_0 = _mm256_extracti128_si256(v_f16, 0);
+        __m128i v_f16_1 = _mm256_extracti128_si256(v_f16, 1);
+        __m256 v_f32_0 = _mm256_cvtph_ps(v_f16_0);
+        __m256 v_f32_1 = _mm256_cvtph_ps(v_f16_1);
+        _mm256_store_ps(out + i, v_f32_0);
+        _mm256_store_ps(out + i + 8, v_f32_1);
+      }
+    }
+
+    float fp32_from_fp16(uint16_t in)
+    {
+      return _cvtsh_ss(in);
+    }
+
+    void unquantize_row(const GPTQMatrix &mat, uint32_t i_row, float *out)
+    {
+      for (uint32_t i_col = 0; i_col < mat.cols; i_col++)
+      {
+        uint32_t i_block = i_col / mat.block_size;
+        uint32_t i_scale = (mat.cols / mat.block_size) * i_row + i_block;
+        uint32_t i_zero = (mat.cols / mat.block_size) * (i_row / 8) + i_block;
+
+        float scale = fp32_from_fp16(mat.scales[i_scale]);
+
+        uint32_t zero_quant_group = mat.qzeros[i_zero / 8];
+        uint32_t zero_quant = (zero_quant_group >> (4 * (i_zero % 8))) & 0xf;
+        float zero = float(zero_quant + 1) * scale;
+
+        uint32_t weight_quant_group = mat.qweight[i_col / 8];
+        uint32_t weight_quant = (weight_quant_group >> (4 * (i_col % 8))) & 0xf;
+        float weight = float(weight_quant) * scale;
+
+        out[i_col] = weight + zero;
+      }
+    }
+
+    void matrix_vector_multiply_gptq(const GPTQMatrix &mat, float *temp_row, float *vec_in, float *vec_out)
+    {
+      for (uint32_t i_row = 0; i_row < mat.rows; i_row++)
+      {
+        unquantize_row(mat, i_row, temp_row);
+        vec_out[i_row] = vector_dot_product(mat.cols, temp_row, vec_in);
+      }
     }
 
     void matrix_vector_multiply(uint32_t m, uint32_t n, float *mat_in, float *vec_in, float *vec_out)
@@ -160,15 +212,42 @@ namespace cml
       return (float *)aligned_alloc(cache_line_bytes, n * sizeof(float));
     }
 
+    GPTQMatrix copy_gptq_matrix(const GPTQMatrix &old_mat)
+    {
+      assert(old_mat.block_size % 8 == 0);
+      assert(old_mat.rows % old_mat.block_size == 0);
+      assert(old_mat.cols % old_mat.block_size == 0);
+
+      GPTQMatrix new_mat;
+      new_mat.rows = old_mat.rows;
+      new_mat.cols = old_mat.cols;
+      new_mat.block_size = old_mat.block_size;
+
+      size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
+      size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
+      size_t scales_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint16_t);
+    }
+
+    void free_gptq_matrix(GPTQMatrix &mat)
+    {
+      free(mat.qweight);
+      free(mat.qzeros);
+      free(mat.scales);
+
+      mat.qweight = nullptr;
+      mat.qzeros = nullptr;
+      mat.scales = nullptr;
+    }
+
     struct Weights
     {
-      float *q;              // n_hidden * n_hidden
-      float *k;              // n_hidden * n_hidden
-      float *v;              // n_hidden * n_hidden
-      float *o;              // n_hidden * n_hidden
-      float *l1;             // n_ff * n_hidden
-      float *l2;             // n_ff * n_hidden
-      float *l3;             // n_hidden * n_ff
+      GPTQMatrix q;          // n_hidden * n_hidden
+      GPTQMatrix k;          // n_hidden * n_hidden
+      GPTQMatrix v;          // n_hidden * n_hidden
+      GPTQMatrix o;          // n_hidden * n_hidden
+      GPTQMatrix l1;         // n_ff * n_hidden
+      GPTQMatrix l2;         // n_ff * n_hidden
+      GPTQMatrix l3;         // n_hidden * n_ff
       float *attention_norm; // n_hidden
       float *ff_norm;        // n_hidden
     };
@@ -188,6 +267,7 @@ namespace cml
       float *l2;               // n_hidden
       float *l3;               // n_ff
       float *model_norm;       // n_hidden
+      float *unquantized_row;  // n_ff
     };
 
     struct State
@@ -200,42 +280,38 @@ namespace cml
     class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
+      LlamaLayer(const LlamaGPTQLayerWeights *loader_weights, const llama_hparams *hparams, uint32_t n_cache)
       {
-        llama_hparams *hparams = loader->get_hparams();
         params.n_hidden = hparams->n_embd;
         params.n_context = hparams->n_ctx;
         params.n_heads = hparams->n_head;
         params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
         params.n_cache = n_cache;
 
-        assert(layer_index < hparams->n_layer);
-
-        auto get_weights = [&](const std::string &short_name, const std::vector<uint32_t> &shape)
+        auto get_weight_matrix = [&](const GPTQMatrix &mat, const std::vector<uint32_t> &shape)
         {
-          std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
-
-          uint32_t num_elements = 1;
-          for (uint32_t v : shape)
-          {
-            num_elements *= v;
-          }
-
-          float *data = aligned_alloc_floats(num_elements);
-          float *data_temp = loader->get_tensor_float(name, shape);
-          memcpy(data, data_temp, num_elements * sizeof(float));
-          return data;
+          assert(shape.size() == 2);
+          assert(mat.rows == shape[0]);
+          assert(mat.cols == shape[1]);
+          return copy_gptq_matrix(mat);
         };
 
-        weights.q = get_weights("attention.wq.weight", {params.n_hidden, params.n_hidden});
-        weights.k = get_weights("attention.wk.weight", {params.n_hidden, params.n_hidden});
-        weights.v = get_weights("attention.wv.weight", {params.n_hidden, params.n_hidden});
-        weights.o = get_weights("attention.wo.weight", {params.n_hidden, params.n_hidden});
-        weights.l1 = get_weights("feed_forward.w1.weight", {params.n_ff, params.n_hidden});
-        weights.l2 = get_weights("feed_forward.w2.weight", {params.n_hidden, params.n_ff});
-        weights.l3 = get_weights("feed_forward.w3.weight", {params.n_ff, params.n_hidden});
-        weights.attention_norm = get_weights("attention_norm.weight", {params.n_hidden});
-        weights.ff_norm = get_weights("ffn_norm.weight", {params.n_hidden});
+        auto get_1d_weights = [&](const uint16_t *values, uint32_t n)
+        {
+          float *copied_values = aligned_alloc_floats(n);
+          fp32s_from_fp16s(n, values, copied_values);
+          return copied_values;
+        };
+
+        weights.q = get_weight_matrix(loader_weights->self_attn_q_proj, {params.n_hidden, params.n_hidden});
+        weights.k = get_weight_matrix(loader_weights->self_attn_k_proj, {params.n_hidden, params.n_hidden});
+        weights.v = get_weight_matrix(loader_weights->self_attn_v_proj, {params.n_hidden, params.n_hidden});
+        weights.o = get_weight_matrix(loader_weights->self_attn_o_proj, {params.n_hidden, params.n_hidden});
+        weights.l1 = get_weight_matrix(loader_weights->mlp_up_proj, {params.n_ff, params.n_hidden});
+        weights.l2 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_hidden, params.n_ff});
+        weights.l3 = get_weight_matrix(loader_weights->mlp_down_proj, {params.n_ff, params.n_hidden});
+        weights.attention_norm = get_1d_weights(loader_weights->input_layernorm, params.n_hidden);
+        weights.ff_norm = get_1d_weights(loader_weights->post_attention_layernorm, params.n_hidden);
 
         temp.embedding_0 = aligned_alloc_floats(params.n_hidden);
         temp.embedding_1 = aligned_alloc_floats(params.n_hidden);
@@ -250,6 +326,7 @@ namespace cml
         temp.l2 = aligned_alloc_floats(params.n_hidden);
         temp.l3 = aligned_alloc_floats(params.n_ff);
         temp.model_norm = aligned_alloc_floats(params.n_hidden);
+        temp.unquantized_row = aligned_alloc_floats(params.n_ff);
 
         state.cache_k = aligned_alloc_floats(params.n_cache * params.n_hidden);
         state.cache_v = aligned_alloc_floats(params.n_cache * params.n_hidden);
@@ -260,13 +337,13 @@ namespace cml
 
       virtual ~LlamaLayer()
       {
-        free(weights.q);
-        free(weights.k);
-        free(weights.v);
-        free(weights.o);
-        free(weights.l1);
-        free(weights.l2);
-        free(weights.l3);
+        free_gptq_matrix(weights.q);
+        free_gptq_matrix(weights.k);
+        free_gptq_matrix(weights.v);
+        free_gptq_matrix(weights.o);
+        free_gptq_matrix(weights.l1);
+        free_gptq_matrix(weights.l2);
+        free_gptq_matrix(weights.l3);
         free(weights.attention_norm);
         free(weights.ff_norm);
 
@@ -283,6 +360,7 @@ namespace cml
         free(temp.l2);
         free(temp.l3);
         free(temp.model_norm);
+        free(temp.unquantized_row);
 
         free(state.cache_k);
         free(state.cache_v);
@@ -306,9 +384,9 @@ namespace cml
         }
 
         // Compute Q, K, V
-        matrix_vector_multiply(params.n_hidden, params.n_hidden, weights.q, temp.norm_residual, temp.q);
-        matrix_vector_multiply(params.n_hidden, params.n_hidden, weights.k, temp.norm_residual, temp.k);
-        matrix_vector_multiply(params.n_hidden, params.n_hidden, weights.v, temp.norm_residual, temp.v);
+        matrix_vector_multiply_gptq(weights.q, temp.unquantized_row, temp.norm_residual, temp.q);
+        matrix_vector_multiply_gptq(weights.k, temp.unquantized_row, temp.norm_residual, temp.k);
+        matrix_vector_multiply_gptq(weights.v, temp.unquantized_row, temp.norm_residual, temp.v);
 
         // Apply RoPE
         apply_rope(params, n_path - 1, temp.q);
@@ -323,7 +401,7 @@ namespace cml
                   temp.attention_result);
 
         // Projection and residual
-        matrix_vector_multiply(params.n_hidden, params.n_hidden, weights.o, temp.attention_result, temp.o);
+        matrix_vector_multiply_gptq(weights.o, temp.unquantized_row, temp.attention_result, temp.o);
         for (uint32_t i = 0; i < params.n_hidden; i++)
         {
           temp.o[i] += hidden_in[i];
@@ -337,14 +415,14 @@ namespace cml
         }
 
         // Feed forward
-        matrix_vector_multiply(params.n_ff, params.n_hidden, weights.l1, temp.norm_residual, temp.l1);
-        matrix_vector_multiply(params.n_ff, params.n_hidden, weights.l3, temp.norm_residual, temp.l3);
+        matrix_vector_multiply_gptq(weights.l1, temp.unquantized_row, temp.norm_residual, temp.l1);
+        matrix_vector_multiply_gptq(weights.l3, temp.unquantized_row, temp.norm_residual, temp.l3);
 
         for (uint32_t i = 0; i < params.n_ff; i++)
         {
           temp.l3[i] *= silu(temp.l1[i]);
         }
-        matrix_vector_multiply(params.n_hidden, params.n_ff, weights.l2, temp.l3, temp.l2);
+        matrix_vector_multiply_gptq(weights.l2, temp.unquantized_row, temp.l3, temp.l2);
 
         // Residual
         for (uint32_t i = 0; i < params.n_hidden; i++)
@@ -464,9 +542,9 @@ namespace cml
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
+    create_llama_layer_gptq(const LlamaGPTQLayerWeights *loader_weights, const llama_hparams *hparams, uint32_t n_cache)
     {
-      return new LlamaLayer(loader, layer_index, n_cache);
+      return new LlamaLayer(loader_weights, hparams, n_cache);
     }
 
     __attribute__((visibility("default")))

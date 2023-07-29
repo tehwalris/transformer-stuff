@@ -40,12 +40,12 @@ namespace cml
 
   struct LlamaGPTQLayerWeights
   {
-    uint16_t input_layernorm;
+    uint16_t *input_layernorm;
     GPTQMatrix self_attn_q_proj;
     GPTQMatrix self_attn_k_proj;
     GPTQMatrix self_attn_v_proj;
     GPTQMatrix self_attn_o_proj;
-    uint16_t post_attention_layernorm;
+    uint16_t *post_attention_layernorm;
     GPTQMatrix mlp_up_proj;
     GPTQMatrix mlp_gate_proj;
     GPTQMatrix mlp_down_proj;
