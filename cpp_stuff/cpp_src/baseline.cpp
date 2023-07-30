@@ -12,15 +12,6 @@ namespace cml
     const uint32_t n_ff_multiple = 256;
     const uint32_t cache_line_bytes = 64;
 
-    struct Hyperparams
-    {
-      uint32_t n_hidden;
-      uint32_t n_context;
-      uint32_t n_heads;
-      uint32_t n_ff;
-      uint32_t n_cache;
-    };
-
     void rms_norm(uint32_t n, const float *in, float *out)
     {
       float eps = 1e-6;
@@ -107,7 +98,7 @@ namespace cml
       }
     }
 
-    void apply_rope(const Hyperparams &params, uint32_t position, float *vec)
+    void apply_rope(const LlamaHyperparams &params, uint32_t position, float *vec)
     {
       assert(params.n_hidden % params.n_heads == 0);
       assert((params.n_hidden / params.n_heads) % 2 == 0);
@@ -156,7 +147,7 @@ namespace cml
       }
     }
 
-    void attention(const Hyperparams &params,
+    void attention(const LlamaHyperparams &params,
                    uint32_t n_path, const uint32_t *path,
                    uint32_t new_i, float *new_q, float *new_k, float *new_v,
                    float *cache_k, float *cache_v,
@@ -226,6 +217,20 @@ namespace cml
       size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
       size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
       size_t scales_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint16_t);
+
+      uint32_t *qweight = (uint32_t *)malloc(qweight_bytes);
+      uint32_t *qzeros = (uint32_t *)malloc(qzeros_bytes);
+      uint16_t *scales = (uint16_t *)malloc(scales_bytes);
+
+      memcpy(qweight, old_mat.qweight, qweight_bytes);
+      memcpy(qzeros, old_mat.qzeros, qzeros_bytes);
+      memcpy(scales, old_mat.scales, scales_bytes);
+
+      new_mat.qweight = qweight;
+      new_mat.qzeros = qzeros;
+      new_mat.scales = scales;
+
+      return new_mat;
     }
 
     void free_gptq_matrix(GPTQMatrix &mat)
@@ -246,8 +251,8 @@ namespace cml
       GPTQMatrix v;          // n_hidden * n_hidden
       GPTQMatrix o;          // n_hidden * n_hidden
       GPTQMatrix l1;         // n_ff * n_hidden
-      GPTQMatrix l2;         // n_ff * n_hidden
-      GPTQMatrix l3;         // n_hidden * n_ff
+      GPTQMatrix l2;         // n_hidden * n_ff
+      GPTQMatrix l3;         // n_ff * n_hidden
       float *attention_norm; // n_hidden
       float *ff_norm;        // n_hidden
     };
@@ -280,14 +285,8 @@ namespace cml
     class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaLayer(const LlamaGPTQLayerWeights *loader_weights, const llama_hparams *hparams, uint32_t n_cache)
+      LlamaLayer(const LlamaGPTQLayerWeights *loader_weights, LlamaHyperparams params, uint32_t n_cache) : params(params), n_cache(n_cache)
       {
-        params.n_hidden = hparams->n_embd;
-        params.n_context = hparams->n_ctx;
-        params.n_heads = hparams->n_head;
-        params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
-        params.n_cache = n_cache;
-
         auto get_weight_matrix = [&](const GPTQMatrix &mat, const std::vector<uint32_t> &shape)
         {
           assert(shape.size() == 2);
@@ -308,8 +307,8 @@ namespace cml
         weights.v = get_weight_matrix(loader_weights->self_attn_v_proj, {params.n_hidden, params.n_hidden});
         weights.o = get_weight_matrix(loader_weights->self_attn_o_proj, {params.n_hidden, params.n_hidden});
         weights.l1 = get_weight_matrix(loader_weights->mlp_up_proj, {params.n_ff, params.n_hidden});
-        weights.l2 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_hidden, params.n_ff});
-        weights.l3 = get_weight_matrix(loader_weights->mlp_down_proj, {params.n_ff, params.n_hidden});
+        weights.l2 = get_weight_matrix(loader_weights->mlp_down_proj, {params.n_hidden, params.n_ff});
+        weights.l3 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_ff, params.n_hidden});
         weights.attention_norm = get_1d_weights(loader_weights->input_layernorm, params.n_hidden);
         weights.ff_norm = get_1d_weights(loader_weights->post_attention_layernorm, params.n_hidden);
 
@@ -328,8 +327,8 @@ namespace cml
         temp.model_norm = aligned_alloc_floats(params.n_hidden);
         temp.unquantized_row = aligned_alloc_floats(params.n_ff);
 
-        state.cache_k = aligned_alloc_floats(params.n_cache * params.n_hidden);
-        state.cache_v = aligned_alloc_floats(params.n_cache * params.n_hidden);
+        state.cache_k = aligned_alloc_floats(n_cache * params.n_hidden);
+        state.cache_v = aligned_alloc_floats(n_cache * params.n_hidden);
         state.new_i = 0;
       }
 
@@ -370,7 +369,7 @@ namespace cml
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
-        assert(state.new_i < params.n_cache);
+        assert(state.new_i < n_cache);
         assert(n_path > 0);
         assert(n_path <= state.new_i + 1);
         assert(n_path <= params.n_context);
@@ -441,13 +440,13 @@ namespace cml
       virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
         assert(n_retain <= state.new_i);
-        assert(n_retain <= params.n_cache);
+        assert(n_retain <= n_cache);
 
         float *old_cache_k = state.cache_k;
         float *old_cache_v = state.cache_v;
 
-        state.cache_k = aligned_alloc_floats(params.n_cache * params.n_hidden);
-        state.cache_v = aligned_alloc_floats(params.n_cache * params.n_hidden);
+        state.cache_k = aligned_alloc_floats(n_cache * params.n_hidden);
+        state.cache_v = aligned_alloc_floats(n_cache * params.n_hidden);
 
         for (uint32_t i = 0; i < n_retain; i++)
         {
@@ -462,7 +461,8 @@ namespace cml
       }
 
     private:
-      Hyperparams params;
+      LlamaHyperparams params;
+      uint32_t n_cache;
       Weights weights;
       Temp temp;
       State state;
@@ -542,9 +542,9 @@ namespace cml
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_layer_gptq(const LlamaGPTQLayerWeights *loader_weights, const llama_hparams *hparams, uint32_t n_cache)
+    create_llama_layer_gptq(const LlamaGPTQLayerWeights *loader_weights, LlamaHyperparams params, uint32_t n_cache)
     {
-      return new LlamaLayer(loader_weights, hparams, n_cache);
+      return new LlamaLayer(loader_weights, params, n_cache);
     }
 
     __attribute__((visibility("default")))

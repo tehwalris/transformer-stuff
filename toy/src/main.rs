@@ -1,5 +1,6 @@
 #![feature(iter_array_chunks)]
 
+mod loader;
 mod model;
 mod prediction;
 mod tree;

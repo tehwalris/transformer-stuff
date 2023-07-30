@@ -20,15 +20,6 @@ namespace cml
 
     const uint32_t n_ff_multiple = 256;
 
-    struct Hyperparams
-    {
-      uint32_t n_hidden;
-      uint32_t n_context;
-      uint32_t n_heads;
-      uint32_t n_ff;
-      uint32_t n_cache;
-    };
-
     __global__ void mul_gpu(int n_rows, int n_cols, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
     {
       for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
@@ -349,14 +340,14 @@ namespace cml
     class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
+      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache) : n_cache(n_cache)
       {
         llama_hparams *hparams = loader->get_hparams();
         params.n_hidden = hparams->n_embd;
         params.n_context = hparams->n_ctx;
         params.n_heads = hparams->n_head;
         params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
-        params.n_cache = n_cache;
+        n_cache = n_cache;
 
         assert(layer_index < hparams->n_layer);
         assert(params.n_hidden % 4 == 0);
@@ -418,8 +409,8 @@ namespace cml
         temp.l3_quantized.resize(params.n_ff / 4);
         temp.path.resize(params.n_context);
 
-        state.cache_k.resize(params.n_cache * params.n_hidden);
-        state.cache_v.resize(params.n_cache * params.n_hidden);
+        state.cache_k.resize(n_cache * params.n_hidden);
+        state.cache_v.resize(n_cache * params.n_hidden);
         state.new_i = 0;
 
         HIP_CHECK(hipDeviceSynchronize());
@@ -437,7 +428,7 @@ namespace cml
       {
         assert(uint32_t(n_in) == params.n_hidden);
         assert(uint32_t(n_out) == params.n_hidden);
-        assert(state.new_i < params.n_cache);
+        assert(state.new_i < n_cache);
         assert(n_path > 0);
         assert(n_path <= state.new_i + 1);
         assert(n_path <= params.n_context);
@@ -554,10 +545,10 @@ namespace cml
       virtual void retain(const uint32_t n_retain, const uint32_t *retain) override
       {
         assert(n_retain <= state.new_i);
-        assert(n_retain <= params.n_cache);
+        assert(n_retain <= n_cache);
 
-        thrust::device_vector<float> old_cache_k(params.n_cache * params.n_hidden);
-        thrust::device_vector<float> old_cache_v(params.n_cache * params.n_hidden);
+        thrust::device_vector<float> old_cache_k(n_cache * params.n_hidden);
+        thrust::device_vector<float> old_cache_v(n_cache * params.n_hidden);
 
         old_cache_k.swap(state.cache_k);
         old_cache_v.swap(state.cache_v);
@@ -572,7 +563,8 @@ namespace cml
       }
 
     private:
-      Hyperparams params;
+      LlamaHyperparams params;
+      uint32_t n_cache;
       Weights weights;
       Temp temp;
       State state;

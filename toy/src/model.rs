@@ -5,8 +5,11 @@ use std::thread;
 use indicatif::ProgressBar;
 use rayon::prelude::*;
 
-use cpp_stuff_nice::SimpleTransformerLayer;
+use cpp_stuff_nice::{LlamaHyperparams, SimpleTransformerLayer};
+use safetensors::SafeTensors;
 use tracing::span;
+
+use crate::loader::GPTQLlamaLoader;
 
 pub enum Backend {
     Baseline,
@@ -15,7 +18,7 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub fn create_llama_layer(
+    pub fn create_llama_layer_ggml(
         &self,
         loader: &mut cpp_stuff_nice::SimpleLlamaModelLoader,
         i_layer: usize,
@@ -25,12 +28,14 @@ impl Backend {
         let n_cache = n_cache.try_into().unwrap();
         match self {
             Backend::Baseline => {
-                cpp_stuff_nice::baseline::create_llama_layer(loader, i_layer, n_cache)
+                panic!("GGML is not supported with the baseline backend")
             }
             Backend::Cuda => cpp_stuff_nice::cuda::create_llama_layer(loader, i_layer, n_cache),
             Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer, n_cache),
         }
     }
+
+    pub fn create_llama_layer_gptq<'a>(&self, loader: &GPTQLlamaLoader<'a>) {}
 }
 
 pub struct Model {
@@ -75,7 +80,7 @@ impl Model {
                 let span = span!(tracing::Level::INFO, "load_layer", i_layer);
                 let _enter = span.enter();
                 let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path);
-                let layer = backend.create_llama_layer(&mut loader, i_layer, n_cache);
+                let layer = backend.create_llama_layer_ggml(&mut loader, i_layer, n_cache);
                 progress_bar.inc(1);
                 layer
             })
