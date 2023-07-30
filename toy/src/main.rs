@@ -14,34 +14,28 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Result;
+use cpp_stuff_nice::LlamaHyperparams;
+use loader::GPTQLlamaLoader;
 use memmap2::MmapOptions;
-use safetensors::SafeTensors;
 use tracing_subscriber::prelude::*;
 
 use crate::{prediction::prediction_thread_main, tree::InferenceTree};
 
-fn test_thing(path: impl AsRef<Path>) {
-    let file = File::open(path).unwrap();
-    let buffer = unsafe { MmapOptions::new().map(&file).unwrap() };
-    let tensors = SafeTensors::deserialize(&buffer).unwrap();
+fn test_thing(path: impl AsRef<Path>) -> Result<()> {
+    let file = File::open(path)?;
+    let buffer = unsafe { MmapOptions::new().map(&file)? };
+    let params = LlamaHyperparams {
+        n_hidden: 4096,
+        n_context: 4096,
+        n_heads: 32,
+        n_ff: 11008,
+    };
+    let loader = GPTQLlamaLoader::new(&buffer, params, 128)?;
 
-    let mut names: Vec<_> = tensors
-        .names()
-        .iter()
-        .filter(|name| name.starts_with("model.layers.17."))
-        .cloned()
-        .collect();
-    names.sort();
-    for name in names {
-        let tensor = tensors.tensor(name).unwrap();
-        println!(
-            "{}: {:?} {:?} {:?}",
-            name,
-            tensor.shape(),
-            tensor.dtype(),
-            &tensor.data()[..8],
-        );
-    }
+    let layer = loader.load_layer(7)?;
+
+    Ok(())
 }
 
 fn main() {
@@ -59,7 +53,7 @@ fn main() {
         .build();
     tracing_subscriber::registry().with(chrome_layer).init();
 
-    test_thing(model_path);
+    test_thing(model_path).unwrap();
 
     return;
 

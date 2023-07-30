@@ -54,9 +54,9 @@ impl<'a> GPTQMatrix<'a> {
         assert!(block_size % 8 == 0);
         assert!(rows % block_size == 0);
         assert!(cols % block_size == 0);
-        assert!(qweight.len() == cols / 8 * rows);
-        assert!(qzeros.len() == cols / block_size * rows / 8);
-        assert!(scales.len() == cols / 8 * rows);
+        assert!(qweight.len() == 4 * cols / 8 * rows);
+        assert!(qzeros.len() == 4 * cols / block_size * rows / 8);
+        assert!(scales.len() == 2 * cols / block_size * rows);
         GPTQMatrix {
             inner: cml_GPTQMatrix {
                 rows: rows.try_into().unwrap(),

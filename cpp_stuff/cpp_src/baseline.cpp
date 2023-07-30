@@ -216,7 +216,7 @@ namespace cml
 
       size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
       size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
-      size_t scales_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint16_t);
+      size_t scales_bytes = (old_mat.cols / old_mat.block_size) * old_mat.rows * sizeof(uint16_t);
 
       uint32_t *qweight = (uint32_t *)malloc(qweight_bytes);
       uint32_t *qzeros = (uint32_t *)malloc(qzeros_bytes);
