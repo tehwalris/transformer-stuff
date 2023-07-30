@@ -23,17 +23,22 @@ use tracing_subscriber::prelude::*;
 use crate::{prediction::prediction_thread_main, tree::InferenceTree};
 
 fn test_thing(path: impl AsRef<Path>) -> Result<()> {
-    let file = File::open(path)?;
-    let buffer = unsafe { MmapOptions::new().map(&file)? };
     let params = LlamaHyperparams {
         n_hidden: 4096,
         n_context: 4096,
         n_heads: 32,
         n_ff: 11008,
     };
-    let loader = GPTQLlamaLoader::new(&buffer, params, 128)?;
+    let n_cache = params.n_context.try_into().unwrap();
+    let gptq_block_size = 128;
 
-    let layer = loader.load_layer(7)?;
+    let file = File::open(path)?;
+    let buffer = unsafe { MmapOptions::new().map(&file)? };
+    let loader = GPTQLlamaLoader::new(&buffer, params, gptq_block_size)?;
+
+    let layer_weights = loader.load_layer(0)?;
+
+    let layer = cpp_stuff_nice::baseline::create_llama_layer_gptq(&layer_weights, params, n_cache);
 
     Ok(())
 }
