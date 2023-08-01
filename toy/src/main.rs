@@ -37,7 +37,7 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
     };
     let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params)?;
 
-    let input_str = "My name";
+    let input_str = "Cows";
     let input_encoding = tokenizer
         .encode(input_str, true)
         .map_err(|err| anyhow!(err))?;

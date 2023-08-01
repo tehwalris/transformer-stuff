@@ -213,16 +213,16 @@ pub mod baseline {
 pub mod cuda {
     use super::*;
 
-    pub fn create_llama_layer(
-        loader: &mut SimpleLlamaModelLoader,
-        layer_index: u32,
-        n_cache: u32,
+    pub fn create_llama_layer_gptq(
+        loader_weights: &LlamaGPTQLayerWeights,
+        params: LlamaHyperparams,
+        n_cache: usize,
     ) -> SimpleTransformerLayer {
         unsafe {
-            SimpleTransformerLayer(cml_cuda_create_llama_layer(
-                &mut loader.0,
-                layer_index,
-                n_cache,
+            SimpleTransformerLayer(cml_cuda_create_llama_layer_gptq(
+                &loader_weights.inner,
+                params,
+                n_cache.try_into().unwrap(),
             ))
         }
     }

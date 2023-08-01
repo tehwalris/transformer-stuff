@@ -33,7 +33,9 @@ impl Backend {
             Backend::Baseline => {
                 panic!("GGML is not supported with the baseline backend")
             }
-            Backend::Cuda => cpp_stuff_nice::cuda::create_llama_layer(loader, i_layer, n_cache),
+            Backend::Cuda => {
+                panic!("GGML is not supported with the CUDA backend")
+            }
             Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer, n_cache),
         }
     }
@@ -109,7 +111,7 @@ impl Model {
 
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|err| anyhow!(err))?;
 
-        let n_cache = params.n_context.try_into().unwrap();
+        let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
 
         let weights_buffer = {
             let file = File::open(weights_path)?;
@@ -122,7 +124,7 @@ impl Model {
         let layers = (0..(params.n_layers as usize))
             .map(|layer_index| {
                 let layer_weights = loader.load_layer(layer_index)?;
-                Ok(cpp_stuff_nice::baseline::create_llama_layer_gptq(
+                Ok(cpp_stuff_nice::cuda::create_llama_layer_gptq(
                     &layer_weights,
                     params,
                     n_cache,

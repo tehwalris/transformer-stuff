@@ -208,94 +208,101 @@ namespace cml
                         ScaledMulFunctor(1.0f / std::sqrt(sq_norm / float(in.size()) + eps)));
     }
 
-    struct QuantizedMatrix
+    __global__ void mul_gpu_new(const int n_rows, const int n_cols, const int block_size, const uint32_t *__restrict__ qweight, const uint32_t *__restrict__ qzeros, const half *__restrict__ scales, const float *__restrict__ x, float *__restrict__ y)
     {
-      uint32_t n;
-      uint32_t m;
-      char4 *data = nullptr;
-      float *scale = nullptr;
-
-      QuantizedMatrix() = default;
-
-      QuantizedMatrix(uint32_t n, uint32_t m) : n(n), m(m)
+      for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
       {
-        assert(m % 4 == 0);
-        CUDA_CHECK(cudaMallocManaged(&data, n * (m / 4) * sizeof(char4)));
-        CUDA_CHECK(cudaMallocManaged(&scale, n * sizeof(float)));
-      }
-
-      QuantizedMatrix(const QuantizedMatrix &) = delete;
-
-      QuantizedMatrix(QuantizedMatrix &&other) : n(other.n), m(other.m), data(other.data), scale(other.scale)
-      {
-        other.data = nullptr;
-        other.scale = nullptr;
-      }
-
-      ~QuantizedMatrix()
-      {
-        if (data != nullptr)
+        float sum = 0;
+        for (int i_col = threadIdx.x; i_col < n_cols; i_col += blockDim.x)
         {
-          CUDA_CHECK(cudaFree(data));
+          uint32_t i_qweight = (i_col / 8) * n_rows + i_row;
+          uint32_t i_qzeros = (i_col / block_size) * (n_rows / 8) + (i_row / 8);
+          uint32_t i_scales = (i_col / block_size) * n_rows + i_row;
+
+          float scale = __half2float(scales[i_scales]);
+
+          uint32_t zero_quant_group = qzeros[i_qzeros];
+          uint32_t zero_quant = (zero_quant_group >> (4 * (i_row % 8))) & 0xf;
+          float zero = float(zero_quant + 1) * scale;
+
+          uint32_t weight_quant_group = qweight[i_qweight];
+          uint32_t weight_quant = (weight_quant_group >> (4 * (i_col % 8))) & 0xf;
+          float weight = float(weight_quant) * scale;
+
+          sum += (weight - zero) * x[i_col];
         }
-        if (scale != nullptr)
-        {
-          CUDA_CHECK(cudaFree(scale));
-        }
+        atomicAdd(&y[i_row], float(sum));
       }
+    }
 
-      QuantizedMatrix &operator=(QuantizedMatrix &&other) noexcept
-      {
-        if (this != &other)
-        {
-          n = other.n;
-          m = other.m;
-          data = other.data;
-          scale = other.scale;
-          other.data = nullptr;
-          other.scale = nullptr;
-        }
-        return *this;
-      }
+    struct GPTQMatrixGPU
+    {
+      int rows;
+      int cols;
+      int block_size;
 
-      void fill_from_unquantized(const float *unquantized)
-      {
-        for (uint32_t i = 0; i < n; i++)
-        {
-          float max_abs = 0;
-          for (uint32_t j = 0; j < m; j++)
-          {
-            float abs = fabs(unquantized[i * m + j]);
-            if (abs > max_abs)
-            {
-              max_abs = abs;
-            }
-          }
-
-          float scale = max_abs / 127.0f;
-          this->scale[i] = scale;
-          float inv_scale = 1.0f / scale;
-
-          for (uint32_t j = 0; j < m; j += 4)
-          {
-            this->data[(i * m + j) / 4].x = (int8_t)(unquantized[i * m + j + 0] * inv_scale);
-            this->data[(i * m + j) / 4].y = (int8_t)(unquantized[i * m + j + 1] * inv_scale);
-            this->data[(i * m + j) / 4].z = (int8_t)(unquantized[i * m + j + 2] * inv_scale);
-            this->data[(i * m + j) / 4].w = (int8_t)(unquantized[i * m + j + 3] * inv_scale);
-          }
-        }
-      }
+      uint32_t *qweight;
+      uint32_t *qzeros;
+      half *scales;
     };
+
+    void mul_gpu_full(const GPTQMatrixGPU &A, const float *__restrict__ x, float *__restrict__ y)
+    {
+      assert(A.rows % A.block_size == 0);
+      assert(A.cols % A.block_size == 0);
+
+      const dim3 block_size(32, 8);
+      const dim3 grid_size(1, ceil_div<uint32_t>(A.rows, block_size.y));
+
+      mul_gpu_new<<<grid_size, block_size>>>(A.rows, A.cols, A.block_size, A.qweight, A.qzeros, A.scales, x, y);
+    }
+
+    GPTQMatrixGPU copy_gptq_matrix_gpu(const GPTQMatrix &old_mat)
+    {
+      assert(old_mat.block_size % 8 == 0);
+      assert(old_mat.rows % old_mat.block_size == 0);
+      assert(old_mat.cols % old_mat.block_size == 0);
+
+      GPTQMatrixGPU new_mat;
+      new_mat.rows = int(old_mat.rows);
+      new_mat.cols = int(old_mat.cols);
+      new_mat.block_size = int(old_mat.block_size);
+
+      size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
+      size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
+      size_t scales_bytes = (old_mat.cols / old_mat.block_size) * old_mat.rows * sizeof(half);
+
+      CUDA_CHECK(cudaMalloc(&new_mat.qweight, qweight_bytes));
+      CUDA_CHECK(cudaMalloc(&new_mat.qzeros, qzeros_bytes));
+      CUDA_CHECK(cudaMalloc(&new_mat.scales, scales_bytes));
+
+      CUDA_CHECK(cudaMemcpy(new_mat.qweight, old_mat.qweight, qweight_bytes, cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(new_mat.qzeros, old_mat.qzeros, qzeros_bytes, cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(new_mat.scales, old_mat.scales, scales_bytes, cudaMemcpyHostToDevice));
+
+      return new_mat;
+    }
+
+    void free_gptq_matrix_gpu(GPTQMatrixGPU &mat)
+    {
+      CUDA_CHECK(cudaFree(mat.qweight));
+      CUDA_CHECK(cudaFree(mat.qzeros));
+      CUDA_CHECK(cudaFree(mat.scales));
+
+      mat.qweight = nullptr;
+      mat.qzeros = nullptr;
+      mat.scales = nullptr;
+    }
 
     struct Weights
     {
-      QuantizedMatrix q;     // n_hidden * n_hidden
-      QuantizedMatrix k;     // n_hidden * n_hidden
-      QuantizedMatrix v;     // n_hidden * n_hidden
-      QuantizedMatrix o;     // n_hidden * n_hidden
-      QuantizedMatrix l1;    // n_ff * n_hidden
-      QuantizedMatrix l2;    // n_hidden * n_ff
-      QuantizedMatrix l3;    // n_ff * n_hidden
+      GPTQMatrixGPU q;       // n_hidden * n_hidden
+      GPTQMatrixGPU k;       // n_hidden * n_hidden
+      GPTQMatrixGPU v;       // n_hidden * n_hidden
+      GPTQMatrixGPU o;       // n_hidden * n_hidden
+      GPTQMatrixGPU l1;      // n_ff * n_hidden
+      GPTQMatrixGPU l2;      // n_hidden * n_ff
+      GPTQMatrixGPU l3;      // n_ff * n_hidden
       float *attention_norm; // n_hidden
       float *ff_norm;        // n_hidden
     };
@@ -331,53 +338,53 @@ namespace cml
     class LlamaLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaLayer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache) : n_cache(n_cache)
+      LlamaLayer(const LlamaGPTQLayerWeights *loader_weights, LlamaHyperparams params, uint32_t n_cache) : params(params), n_cache(n_cache)
       {
-        llama_hparams *hparams = loader->get_hparams();
-        params.n_hidden = hparams->n_embd;
-        params.n_context = hparams->n_ctx;
-        params.n_heads = hparams->n_head;
-        params.n_ff = ((2 * (4 * params.n_hidden) / 3 + n_ff_multiple - 1) / n_ff_multiple) * n_ff_multiple;
-
-        assert(layer_index < hparams->n_layer);
         assert(params.n_hidden % 4 == 0);
         assert(params.n_ff % 4 == 0);
         assert(params.n_hidden % params.n_heads == 0);
         assert((params.n_hidden / params.n_heads) % 2 == 0);
+        assert(params.gptq_block_size % 8 == 0);
+        assert(params.n_hidden % params.gptq_block_size == 0);
+        assert(params.n_ff % params.gptq_block_size == 0);
+        assert(params.n_vocab % params.gptq_block_size == 0);
 
-        auto get_quantized_matrix = [&](const std::string &short_name, uint32_t n, uint32_t m)
+        auto get_weight_matrix = [&](const GPTQMatrix &mat, const std::vector<uint32_t> &shape)
         {
-          std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
-
-          QuantizedMatrix q(n, m);
-
-          q.fill_from_unquantized(loader->get_tensor_float(name, {n, m}));
-
-          return q;
+          assert(shape.size() == 2);
+          assert(mat.rows == shape[0]);
+          assert(mat.cols == shape[1]);
+          return copy_gptq_matrix_gpu(mat);
         };
 
-        auto get_vector = [&](const std::string &short_name, uint32_t n)
+        auto get_1d_weights = [&](const uint16_t *values, uint32_t n)
         {
-          std::string name = "layers." + std::to_string(layer_index) + "." + short_name;
+          assert(n % 2 == 0);
 
-          float *data;
-          CUDA_CHECK(cudaMallocManaged(&data, n * sizeof(float)));
+          float *converted_values = new float[n];
+          for (uint32_t i = 0; i < n; i++)
+          {
+            converted_values[i] = __half2float(values[i]);
+          }
 
-          float *data_temp = loader->get_tensor_float(name, {n});
-          memcpy(data, data_temp, n * sizeof(float));
+          float *copied_values;
+          CUDA_CHECK(cudaMalloc(&copied_values, n * sizeof(float)));
+          CUDA_CHECK(cudaMemcpy(copied_values, converted_values, n * sizeof(float), cudaMemcpyHostToDevice));
 
-          return data;
+          delete[] converted_values;
+
+          return copied_values;
         };
 
-        weights.q = get_quantized_matrix("attention.wq.weight", params.n_hidden, params.n_hidden);
-        weights.k = get_quantized_matrix("attention.wk.weight", params.n_hidden, params.n_hidden);
-        weights.v = get_quantized_matrix("attention.wv.weight", params.n_hidden, params.n_hidden);
-        weights.o = get_quantized_matrix("attention.wo.weight", params.n_hidden, params.n_hidden);
-        weights.l1 = get_quantized_matrix("feed_forward.w1.weight", params.n_ff, params.n_hidden);
-        weights.l2 = get_quantized_matrix("feed_forward.w2.weight", params.n_hidden, params.n_ff);
-        weights.l3 = get_quantized_matrix("feed_forward.w3.weight", params.n_ff, params.n_hidden);
-        weights.attention_norm = get_vector("attention_norm.weight", params.n_hidden);
-        weights.ff_norm = get_vector("ffn_norm.weight", params.n_hidden);
+        weights.q = get_weight_matrix(loader_weights->self_attn_q_proj, {params.n_hidden, params.n_hidden});
+        weights.k = get_weight_matrix(loader_weights->self_attn_k_proj, {params.n_hidden, params.n_hidden});
+        weights.v = get_weight_matrix(loader_weights->self_attn_v_proj, {params.n_hidden, params.n_hidden});
+        weights.o = get_weight_matrix(loader_weights->self_attn_o_proj, {params.n_hidden, params.n_hidden});
+        weights.l1 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_ff, params.n_hidden});
+        weights.l2 = get_weight_matrix(loader_weights->mlp_down_proj, {params.n_hidden, params.n_ff});
+        weights.l3 = get_weight_matrix(loader_weights->mlp_up_proj, {params.n_ff, params.n_hidden});
+        weights.attention_norm = get_1d_weights(loader_weights->input_layernorm, params.n_hidden);
+        weights.ff_norm = get_1d_weights(loader_weights->post_attention_layernorm, params.n_hidden);
 
         temp.hidden_in.resize(params.n_hidden);
         temp.hidden_out.resize(params.n_hidden);
@@ -466,13 +473,9 @@ namespace cml
         rms_norm_gpu_full(temp.hidden_in, temp.norm_residual, thrust::device_ptr<float>(weights.attention_norm));
 
         // Compute Q, K, V
-        float qkv_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
-        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.q.data, temp.norm_residual_quantized.data().get(), temp.q.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.q.data().get(), weights.q.scale, qkv_unquantize_scale);
-        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.k.data, temp.norm_residual_quantized.data().get(), temp.k.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.k.data().get(), weights.k.scale, qkv_unquantize_scale);
-        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.v.data, temp.norm_residual_quantized.data().get(), temp.v.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.v.data().get(), weights.v.scale, qkv_unquantize_scale);
+        mul_gpu_full(weights.q, temp.norm_residual.data().get(), temp.q.data().get());
+        mul_gpu_full(weights.k, temp.norm_residual.data().get(), temp.k.data().get());
+        mul_gpu_full(weights.v, temp.norm_residual.data().get(), temp.v.data().get());
 
         // Apply RoPE
         rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, n_path - 1, temp.q.data().get());
@@ -493,28 +496,21 @@ namespace cml
         attention_sum_gpu<<<grid_size_attention_sum, block_size_attention_sum>>>(params.n_hidden, params.n_heads, n_path, temp.path.data().get(), state.cache_v.data().get(), temp.attention.data().get(), temp.attention_sum.data().get(), temp.attention_result.data().get());
 
         // Projection and residual
-        float projection_unquantize_scale = quantize_gpu_full(temp.attention_result, temp.attention_result_quantized);
-        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_hidden, weights.o.data, temp.attention_result_quantized.data().get(), temp.o.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.o.data().get(), weights.o.scale, projection_unquantize_scale);
+        mul_gpu_full(weights.o, temp.attention_result.data().get(), temp.o.data().get());
         thrust::transform(temp.o.begin(), temp.o.end(), temp.hidden_in.begin(), temp.o.begin(), thrust::plus<float>());
 
         // Norm before feed forward
         rms_norm_gpu_full(temp.o, temp.norm_residual, thrust::device_ptr<float>(weights.ff_norm));
 
         // Feed forward (up)
-        float ff_up_unquantize_scale = quantize_gpu_full(temp.norm_residual, temp.norm_residual_quantized);
-        mul_gpu<<<grid_size_mul_n_ff, block_size_mul_n_ff>>>(params.n_ff, params.n_hidden, weights.l1.data, temp.norm_residual_quantized.data().get(), temp.l1.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_ff, temp.l1.data().get(), weights.l1.scale, ff_up_unquantize_scale);
-        mul_gpu<<<grid_size_mul_n_ff, block_size_mul_n_ff>>>(params.n_ff, params.n_hidden, weights.l3.data, temp.norm_residual_quantized.data().get(), temp.l3.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_ff, temp.l3.data().get(), weights.l3.scale, ff_up_unquantize_scale);
+        mul_gpu_full(weights.l1, temp.norm_residual.data().get(), temp.l1.data().get());
+        mul_gpu_full(weights.l3, temp.norm_residual.data().get(), temp.l3.data().get());
 
         // Feed forward (silu)
         thrust::transform(temp.l3.begin(), temp.l3.end(), temp.l1.begin(), temp.l3.begin(), SiluMultiplyFunctor<float>());
 
         // Feed forward (down)
-        float ff_down_unquantize_scale = quantize_gpu_full(temp.l3, temp.l3_quantized);
-        mul_gpu<<<grid_size_mul_n_hidden, block_size_mul_n_hidden>>>(params.n_hidden, params.n_ff, weights.l2.data, temp.l3_quantized.data().get(), temp.l2.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(params.n_hidden, temp.l2.data().get(), weights.l2.scale, ff_down_unquantize_scale);
+        mul_gpu_full(weights.l2, temp.l3.data().get(), temp.l2.data().get());
 
         // Residual
         thrust::transform(temp.l2.begin(), temp.l2.end(), temp.o.begin(), temp.l2.begin(), thrust::plus<float>());
@@ -573,8 +569,8 @@ namespace cml
         float *data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
         memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
 
-        weights_output_layer = QuantizedMatrix(n_vocab, n_hidden);
-        weights_output_layer.fill_from_unquantized(loader->get_tensor_float("output.weight", {n_vocab, n_hidden}));
+        // weights_output_layer = QuantizedMatrix(n_vocab, n_hidden);
+        // weights_output_layer.fill_from_unquantized(loader->get_tensor_float("output.weight", {n_vocab, n_hidden}));
 
         temp_hidden_in.resize(n_hidden);
         temp_hidden_out.resize(n_vocab);
@@ -612,12 +608,12 @@ namespace cml
         thrust::fill(temp_hidden_out.begin(), temp_hidden_out.end(), 0.0f);
 
         // Norm before output layer
-        rms_norm_gpu_full(temp_hidden_in, temp_model_norm, thrust::device_ptr<float>(weights_model_norm));
+        // rms_norm_gpu_full(temp_hidden_in, temp_model_norm, thrust::device_ptr<float>(weights_model_norm));
 
         // Output layer
-        float unquantize_scale = quantize_gpu_full(temp_model_norm, temp_model_norm_quantized);
-        mul_gpu<<<grid_size_mul_n_vocab, block_size_mul_n_vocab>>>(n_vocab, n_hidden, weights_output_layer.data, temp_model_norm_quantized.data().get(), temp_hidden_out.data().get());
-        post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(n_vocab, temp_hidden_out.data().get(), weights_output_layer.scale, unquantize_scale);
+        // float unquantize_scale = quantize_gpu_full(temp_model_norm, temp_model_norm_quantized);
+        // mul_gpu<<<grid_size_mul_n_vocab, block_size_mul_n_vocab>>>(n_vocab, n_hidden, weights_output_layer.data, temp_model_norm_quantized.data().get(), temp_hidden_out.data().get());
+        // post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(n_vocab, temp_hidden_out.data().get(), weights_output_layer.scale, unquantize_scale);
 
         // Copy from GPU
         thrust::copy(temp_hidden_out.begin(), temp_hidden_out.end(), hidden_out);
@@ -645,14 +641,14 @@ namespace cml
       thrust::device_vector<float> temp_model_norm;
       thrust::device_vector<char4> temp_model_norm_quantized;
       float *weights_model_norm;
-      QuantizedMatrix weights_output_layer;
+      // QuantizedMatrix weights_output_layer;
     };
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_layer(SimpleLlamaModelLoader *loader, uint32_t layer_index, uint32_t n_cache)
+    create_llama_layer_gptq(const LlamaGPTQLayerWeights *loader_weights, LlamaHyperparams params, uint32_t n_cache)
     {
-      return new LlamaLayer(loader, layer_index, n_cache);
+      return new LlamaLayer(loader_weights, params, n_cache);
     }
 
     __attribute__((visibility("default")))

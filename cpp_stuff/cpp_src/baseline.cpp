@@ -330,13 +330,6 @@ namespace cml
         state.cache_k = aligned_alloc_floats(n_cache * params.n_hidden);
         state.cache_v = aligned_alloc_floats(n_cache * params.n_hidden);
         state.new_i = 0;
-
-        // unquantize_row(weights.q, 0, temp.unquantized_row);
-        // for (uint32_t i = 0; i < params.n_hidden; i++)
-        // {
-        //   printf("%f ", temp.unquantized_row[i]);
-        // }
-        // exit(1);
       }
 
       LlamaLayer(const LlamaLayer &) = delete;

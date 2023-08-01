@@ -19,12 +19,6 @@ impl<'a> GPTQLlamaLoader<'a> {
             ));
         }
 
-        /*
-        lm_head.weight [32000, 4096] F16
-        model.embed_tokens.weight [32000, 4096] F16
-        model.norm.weight [4096] F16
-        */
-
         let tensors = SafeTensors::deserialize(&buffer)?;
         Ok(Self { tensors, params })
     }
