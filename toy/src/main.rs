@@ -10,6 +10,7 @@ mod vocab;
 use std::{
     fs::File,
     io::BufWriter,
+    panic::Location,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -18,18 +19,13 @@ use anyhow::{anyhow, Result};
 use cpp_stuff_nice::LlamaHyperparams;
 use loader::GPTQLlamaLoader;
 use memmap2::MmapOptions;
+use model::Model;
 use tokenizers::Tokenizer;
 use tracing_subscriber::prelude::*;
 
 use crate::{prediction::prediction_thread_main, tree::InferenceTree};
 
-fn test_thing(model_path: impl AsRef<Path>) -> Result<()> {
-    let model_path = model_path.as_ref();
-    let weights_path = model_path.join("gptq_model-4bit-128g.safetensors");
-    let tokenizer_path = model_path.join("tokenizer.json");
-
-    let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|err| anyhow!(err))?;
-
+fn test_thing(path: impl AsRef<Path>) -> Result<()> {
     let params = LlamaHyperparams {
         n_hidden: 4096,
         n_context: 4096,
@@ -39,31 +35,37 @@ fn test_thing(model_path: impl AsRef<Path>) -> Result<()> {
         n_layers: 32,
         gptq_block_size: 128,
     };
-    let n_cache = params.n_context.try_into().unwrap();
+    let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params)?;
 
-    let weights_buffer = {
-        let file = File::open(weights_path)?;
-        unsafe { MmapOptions::new().map(&file)? }
-    };
-    let loader = GPTQLlamaLoader::new(&weights_buffer, params)?;
+    let input_str = "Hello I'm a";
+    let input_encoding = tokenizer
+        .encode(input_str, true)
+        .map_err(|err| anyhow!(err))?;
 
-    let vocab_embeddings = loader.load_vocab_embeddings()?;
+    let mut prediction_path = vec![];
+    let mut next_token_id = input_encoding.get_ids()[0];
+    for i in 1..(input_encoding.len() + 10) {
+        let next_token_str = tokenizer
+            .decode(vec![next_token_id], false)
+            .map_err(|err| anyhow!(err))?;
+        println!("{}: {}", next_token_id, next_token_str);
 
-    let layers = (0..(params.n_layers as usize))
-        .map(|layer_index| {
-            let layer_weights = loader.load_layer(layer_index)?;
-            Ok(cpp_stuff_nice::baseline::create_llama_layer_gptq(
-                &layer_weights,
-                params,
-                n_cache,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let final_layer = {
-        let final_layer_weights = loader.load_final_layer()?;
-        cpp_stuff_nice::baseline::create_llama_final_layer(&final_layer_weights, params)
-    };
+        prediction_path.push(model.next_i());
+        let hidden_in = vocab_embeddings.get_embedding(next_token_id.try_into().unwrap());
+        let logits = model.predict(hidden_in, &prediction_path);
+        if i < input_encoding.len() {
+            next_token_id = input_encoding.get_ids()[i].try_into().unwrap();
+        } else {
+            next_token_id = logits
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .unwrap()
+                .0
+                .try_into()
+                .unwrap();
+        }
+    }
 
     Ok(())
 }

@@ -1,15 +1,18 @@
-use std;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
+use std::{self, fs::File};
 
+use anyhow::{anyhow, Result};
 use indicatif::ProgressBar;
+use memmap2::MmapOptions;
 use rayon::prelude::*;
-
-use cpp_stuff_nice::{LlamaHyperparams, SimpleTransformerLayer};
-use safetensors::SafeTensors;
+use tokenizers::Tokenizer;
 use tracing::span;
 
+use cpp_stuff_nice::{LlamaHyperparams, SimpleTransformerLayer};
+
 use crate::loader::GPTQLlamaLoader;
+use crate::vocab::VocabEmbeddings;
 
 pub enum Backend {
     Baseline,
@@ -34,8 +37,6 @@ impl Backend {
             Backend::Hip => cpp_stuff_nice::hip::create_llama_layer(loader, i_layer, n_cache),
         }
     }
-
-    pub fn create_llama_layer_gptq<'a>(&self, loader: &GPTQLlamaLoader<'a>) {}
 }
 
 pub struct Model {
@@ -98,6 +99,54 @@ impl Model {
         }
     }
 
+    pub fn load_gptq(
+        path: impl AsRef<Path>,
+        params: LlamaHyperparams,
+    ) -> Result<(Self, Tokenizer, VocabEmbeddings)> {
+        let path = path.as_ref();
+        let weights_path = path.join("gptq_model-4bit-128g.safetensors");
+        let tokenizer_path = path.join("tokenizer.json");
+
+        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|err| anyhow!(err))?;
+
+        let n_cache = params.n_context.try_into().unwrap();
+
+        let weights_buffer = {
+            let file = File::open(weights_path)?;
+            unsafe { MmapOptions::new().map(&file)? }
+        };
+        let loader = GPTQLlamaLoader::new(&weights_buffer, params)?;
+
+        let vocab_embeddings = loader.load_vocab_embeddings()?;
+
+        let layers = (0..(params.n_layers as usize))
+            .map(|layer_index| {
+                let layer_weights = loader.load_layer(layer_index)?;
+                Ok(cpp_stuff_nice::baseline::create_llama_layer_gptq(
+                    &layer_weights,
+                    params,
+                    n_cache,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let final_layer = {
+            let final_layer_weights = loader.load_final_layer()?;
+            cpp_stuff_nice::baseline::create_llama_final_layer(&final_layer_weights, params)
+        };
+
+        let model = Self {
+            n_hidden: params.n_hidden.try_into().unwrap(),
+            n_vocab: params.n_vocab.try_into().unwrap(),
+            n_context: params.n_context.try_into().unwrap(),
+            n_cache: params.n_context.try_into().unwrap(),
+            layers,
+            final_layer,
+        };
+
+        Ok((model, tokenizer, vocab_embeddings))
+    }
+
     pub fn predict(&mut self, hidden_in: &[f32], path: &[u32]) -> Vec<f32> {
         assert_eq!(hidden_in.len(), self.n_hidden);
         assert!(path.len() > 0);
@@ -113,6 +162,7 @@ impl Model {
             {
                 let span = span!(tracing::Level::INFO, "layer_forward", i_layer);
                 let _enter = span.enter();
+                println!("DEBUG layer.forward i_layer={}", i_layer);
                 layer.forward(&mut hidden_in, &mut hidden_out, path);
             }
 

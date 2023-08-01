@@ -485,6 +485,8 @@ namespace cml
 
         weights_output_layer = aligned_alloc_floats(n_vocab * n_hidden);
         fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer);
+
+        new_i = 0;
       }
 
       LlamaFinalLayer(const LlamaFinalLayer &) = delete;
