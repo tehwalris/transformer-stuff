@@ -37,7 +37,7 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
     };
     let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params)?;
 
-    let input_str = "Hello I'm a";
+    let input_str = "My name";
     let input_encoding = tokenizer
         .encode(input_str, true)
         .map_err(|err| anyhow!(err))?;
@@ -48,22 +48,28 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
         let next_token_str = tokenizer
             .decode(vec![next_token_id], false)
             .map_err(|err| anyhow!(err))?;
-        println!("{}: {}", next_token_id, next_token_str);
+        println!("next_token {}: {}", next_token_id, next_token_str);
 
         prediction_path.push(model.next_i());
         let hidden_in = vocab_embeddings.get_embedding(next_token_id.try_into().unwrap());
         let logits = model.predict(hidden_in, &prediction_path);
+
+        let argmax_logits = logits
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+
+        let argmax_logits_str = tokenizer
+            .decode(vec![argmax_logits.try_into().unwrap()], false)
+            .map_err(|err| anyhow!(err))?;
+        println!("argmax_logits {}: {}", argmax_logits, argmax_logits_str);
+
         if i < input_encoding.len() {
             next_token_id = input_encoding.get_ids()[i].try_into().unwrap();
         } else {
-            next_token_id = logits
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .unwrap()
-                .0
-                .try_into()
-                .unwrap();
+            next_token_id = argmax_logits.try_into().unwrap();
         }
     }
 

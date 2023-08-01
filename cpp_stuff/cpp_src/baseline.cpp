@@ -63,17 +63,17 @@ namespace cml
     {
       for (uint32_t i_col = 0; i_col < mat.cols; i_col++)
       {
-        uint32_t i_block = i_col / mat.block_size;
-        uint32_t i_scale = (mat.cols / mat.block_size) * i_row + i_block;
-        uint32_t i_zero = (mat.cols / mat.block_size) * (i_row / 8) + i_block;
+        uint32_t i_qweight = (i_col / 8) * mat.rows + i_row;
+        uint32_t i_qzeros = (i_col / mat.block_size) * (mat.rows / 8) + (i_row / 8);
+        uint32_t i_scales = (i_col / mat.block_size) * mat.rows + i_row;
 
-        float scale = fp32_from_fp16(mat.scales[i_scale]);
+        float scale = fp32_from_fp16(mat.scales[i_scales]);
 
-        uint32_t zero_quant_group = mat.qzeros[i_zero / 8];
-        uint32_t zero_quant = (zero_quant_group >> (4 * (i_zero % 8))) & 0xf;
+        uint32_t zero_quant_group = mat.qzeros[i_qzeros];
+        uint32_t zero_quant = (zero_quant_group >> (4 * (i_row % 8))) & 0xf;
         float zero = float(zero_quant + 1) * scale;
 
-        uint32_t weight_quant_group = mat.qweight[i_col / 8];
+        uint32_t weight_quant_group = mat.qweight[i_qweight];
         uint32_t weight_quant = (weight_quant_group >> (4 * (i_col % 8))) & 0xf;
         float weight = float(weight_quant) * scale;
 
@@ -483,8 +483,17 @@ namespace cml
         weights_model_norm = aligned_alloc_floats(n_hidden);
         fp32s_from_fp16s(n_hidden, loader_weights->norm, weights_model_norm);
 
+        float *weights_output_layer_transposed = aligned_alloc_floats(n_hidden * n_vocab);
+        fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer_transposed);
+
         weights_output_layer = aligned_alloc_floats(n_vocab * n_hidden);
-        fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer);
+        for (uint32_t i_row = 0; i_row < n_vocab; i_row++)
+        {
+          for (uint32_t i_col = 0; i_col < n_hidden; i_col++)
+          {
+            weights_output_layer[i_row * n_hidden + i_col] = weights_output_layer_transposed[i_col * n_vocab + i_row];
+          }
+        }
 
         new_i = 0;
       }
