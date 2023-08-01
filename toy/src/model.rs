@@ -164,7 +164,6 @@ impl Model {
             {
                 let span = span!(tracing::Level::INFO, "layer_forward", i_layer);
                 let _enter = span.enter();
-                println!("DEBUG layer.forward i_layer={}", i_layer);
                 layer.forward(&mut hidden_in, &mut hidden_out, path);
             }
 
