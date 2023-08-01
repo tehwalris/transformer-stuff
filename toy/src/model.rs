@@ -117,6 +117,9 @@ impl Model {
         };
         let loader = GPTQLlamaLoader::new(&weights_buffer, params)?;
 
+        loader.debug_gptq()?;
+        return Err(anyhow!("debugging"));
+
         let vocab_embeddings = loader.load_vocab_embeddings()?;
 
         let layers = (0..(params.n_layers as usize))
