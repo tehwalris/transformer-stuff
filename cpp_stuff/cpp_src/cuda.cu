@@ -359,12 +359,14 @@ namespace cml
 
         auto get_1d_weights = [&](const uint16_t *values, uint32_t n)
         {
-          assert(n % 2 == 0);
+          assert(sizeof(uint16_t) == sizeof(half));
 
           float *converted_values = new float[n];
           for (uint32_t i = 0; i < n; i++)
           {
-            converted_values[i] = __half2float(values[i]);
+            half v;
+            memcpy(&v, &values[i], sizeof(uint16_t));
+            converted_values[i] = __half2float(v);
           }
 
           float *copied_values;
