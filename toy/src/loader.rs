@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use cpp_stuff_nice::{GPTQMatrix, LlamaFinalLayerWeights, LlamaGPTQLayerWeights, LlamaHyperparams};
 
-use half::f16;
 use safetensors::SafeTensors;
 
 use crate::vocab::VocabEmbeddings;
@@ -70,65 +69,6 @@ impl<'a> GPTQLlamaLoader<'a> {
             mlp_gate_proj,
             mlp_down_proj,
         ))
-    }
-
-    pub fn debug_gptq(&self) -> Result<()> {
-        let matrix_name = "model.layers.0.mlp.down_proj";
-        // let w = self.load_gptq_matrix(matrix_name)?;
-        // let (rows, columns) = (w.rows(), w.cols());
-        // println!("rows: {}, columns: {}", rows, columns);
-
-        let (qweight, qweight_shape) = self.load_2d_tensor(&format!("{}.qweight", matrix_name))?;
-        let (qzeros, qzeros_shape) = self.load_2d_tensor(&format!("{}.qzeros", matrix_name))?;
-        let (scales, scales_shape) = self.load_2d_tensor(&format!("{}.scales", matrix_name))?;
-
-        println!("qweight: {:?}", qweight_shape);
-        println!("qzeros: {:?}", qzeros_shape);
-        println!("scales: {:?}", scales_shape);
-
-        let gptq_block_size: usize = self.params.gptq_block_size.try_into().unwrap();
-        let get_weight = |i_row: usize, i_column: usize| -> f32 {
-            let i_qweight = (i_row / 8) * qweight_shape.1 + i_column;
-            let i_qzeros = (i_row / gptq_block_size) * qzeros_shape.1 + (i_column / 8);
-            let i_scales = (i_row / gptq_block_size) * scales_shape.1 + i_column;
-
-            let bytes_qweight: [u8; 4] = [
-                qweight[4 * i_qweight + 0],
-                qweight[4 * i_qweight + 1],
-                qweight[4 * i_qweight + 2],
-                qweight[4 * i_qweight + 3],
-            ];
-            let bytes_qzeros: [u8; 4] = [
-                qzeros[4 * i_qzeros + 0],
-                qzeros[4 * i_qzeros + 1],
-                qzeros[4 * i_qzeros + 2],
-                qzeros[4 * i_qzeros + 3],
-            ];
-            let bytes_scales: [u8; 2] = [scales[2 * i_scales + 0], scales[2 * i_scales + 1]];
-
-            let value_qweight = (i32::from_le_bytes(bytes_qweight) >> ((i_row % 8) * 4)) & 0xF;
-            let value_qzeros = (i32::from_le_bytes(bytes_qzeros) >> ((i_column % 8) * 4)) & 0xF;
-            let value_scales = f16::from_le_bytes(bytes_scales);
-
-            return (value_qweight - value_qzeros - 1) as f32 * value_scales.to_f32();
-        };
-
-        /*
-        >>> w = model['layers.0.feed_forward.w2.weight']
-        >>> w[0:3, 0:3]
-        tensor([[ 0.0027, -0.0145,  0.0083],
-                [ 0.0046, -0.0042,  0.0090],
-                [ 0.0020,  0.0339, -0.0044]], dtype=torch.bfloat16)
-        */
-
-        for i_row in 0..3 {
-            for i_column in 0..3 {
-                print!("{:8.4} ", get_weight(i_row, i_column));
-            }
-            println!();
-        }
-
-        Ok(())
     }
 
     pub fn load_final_layer(&self) -> Result<LlamaFinalLayerWeights<'_>> {
