@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use cpp_stuff_nice::{GPTQMatrix, LlamaGPTQLayerWeights, LlamaHyperparams};
+use cpp_stuff_nice::{GPTQMatrix, LlamaFinalLayerWeights, LlamaGPTQLayerWeights, LlamaHyperparams};
 
 use safetensors::SafeTensors;
 
@@ -18,6 +18,12 @@ impl<'a> GPTQLlamaLoader<'a> {
                 params.gptq_block_size
             ));
         }
+
+        /*
+        lm_head.weight [32000, 4096] F16
+        model.embed_tokens.weight [32000, 4096] F16
+        model.norm.weight [4096] F16
+        */
 
         let tensors = SafeTensors::deserialize(&buffer)?;
         Ok(Self { tensors, params })
@@ -63,6 +69,24 @@ impl<'a> GPTQLlamaLoader<'a> {
             mlp_gate_proj,
             mlp_down_proj,
         ))
+    }
+
+    pub fn load_final_layer(&self) -> Result<LlamaFinalLayerWeights<'_>> {
+        let n_hidden: usize = self.params.n_hidden.try_into().unwrap();
+        let n_vocab: usize = self.params.n_vocab.try_into().unwrap();
+
+        let norm = self.load_1d_tensor_with_shape("model.norm.weight", n_hidden)?;
+        let (lm_head, lm_head_shape) = self.load_2d_tensor("lm_head.weight")?;
+        if lm_head_shape != (n_vocab, n_hidden) {
+            return Err(anyhow!(
+                "lm_head.weight has shape {:?}, expected ({}, {})",
+                lm_head_shape,
+                n_vocab,
+                n_hidden
+            ));
+        }
+
+        Ok(LlamaFinalLayerWeights::new(norm, lm_head))
     }
 
     pub fn load_vocab_embeddings(&self) -> Result<VocabEmbeddings> {

@@ -117,6 +117,27 @@ impl<'a> LlamaGPTQLayerWeights<'a> {
     }
 }
 
+pub struct LlamaFinalLayerWeights<'a> {
+    inner: cml_LlamaFinalLayerWeights,
+    phantom: PhantomData<&'a [u8]>,
+}
+
+impl<'a> LlamaFinalLayerWeights<'a> {
+    pub fn new(norm: &'a [u8], lm_head: &'a [u8]) -> Self {
+        assert!(norm.len() % 2 == 0);
+        assert!(lm_head.len() % 2 == 0);
+        assert!(lm_head.len() % norm.len() == 0);
+
+        LlamaFinalLayerWeights {
+            inner: cml_LlamaFinalLayerWeights {
+                norm: norm.as_ptr() as *mut u16,
+                lm_head: lm_head.as_ptr() as *mut u16,
+            },
+            phantom: PhantomData,
+        }
+    }
+}
+
 pub type LlamaHyperparams = cml_LlamaHyperparams;
 
 pub struct SimpleTransformerLayer(*mut cml_SimpleTransformerLayer);
@@ -176,8 +197,16 @@ pub mod baseline {
         }
     }
 
-    pub fn create_llama_final_layer(loader: &mut SimpleLlamaModelLoader) -> SimpleTransformerLayer {
-        unsafe { SimpleTransformerLayer(cml_baseline_create_llama_final_layer(&mut loader.0)) }
+    pub fn create_llama_final_layer(
+        loader_weights: &LlamaFinalLayerWeights,
+        params: LlamaHyperparams,
+    ) -> SimpleTransformerLayer {
+        unsafe {
+            SimpleTransformerLayer(cml_baseline_create_llama_final_layer(
+                &loader_weights.inner,
+                params,
+            ))
+        }
     }
 }
 

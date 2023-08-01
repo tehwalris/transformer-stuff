@@ -51,4 +51,9 @@ namespace cml
     GPTQMatrix mlp_down_proj;
   };
 
+  struct LlamaFinalLayerWeights
+  {
+    uint16_t *norm;
+    uint16_t *lm_head;
+  };
 };

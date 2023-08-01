@@ -60,6 +60,11 @@ fn test_thing(model_path: impl AsRef<Path>) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let final_layer = {
+        let final_layer_weights = loader.load_final_layer()?;
+        cpp_stuff_nice::baseline::create_llama_final_layer(&final_layer_weights, params)
+    };
+
     Ok(())
 }
 
@@ -109,49 +114,4 @@ fn main() -> Result<()> {
     guard.flush();
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use rand::Rng;
-
-    const MODEL_PATH: &str = "/home/philippe/Documents/llama/7B/ggml-model-f16.bin"; // HACK
-
-    #[test]
-    fn test_cuda_final_layer() {
-        let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(MODEL_PATH);
-        let n_hidden = usize::try_from(loader.n_hidden()).unwrap();
-        let n_vocab = usize::try_from(loader.n_vocab()).unwrap();
-
-        let mut baseline_layer = cpp_stuff_nice::baseline::create_llama_final_layer(&mut loader);
-        let mut cuda_layer = cpp_stuff_nice::cuda::create_llama_final_layer(&mut loader);
-
-        let mut rng = rand::thread_rng();
-
-        let hidden_in = (0..n_hidden).map(|_| rng.gen()).collect::<Vec<_>>();
-        let mut final_out_baseline = vec![0.0; n_vocab];
-        let mut final_out_cuda = vec![0.0; n_vocab];
-
-        baseline_layer.forward(
-            &hidden_in,
-            &mut final_out_baseline,
-            &[baseline_layer.next_i()],
-        );
-        cuda_layer.forward(&hidden_in, &mut final_out_cuda, &[cuda_layer.next_i()]);
-
-        let tolerance = 0.1;
-        let mut all_close_enough = true;
-        for (i, (a, b)) in final_out_baseline
-            .iter()
-            .zip(final_out_cuda.iter())
-            .enumerate()
-        {
-            let close_enough = (a - b).abs() < tolerance;
-            if !close_enough {
-                all_close_enough = false;
-                println!("{}: {} != {} (tolerance {})", i, a, b, tolerance)
-            }
-        }
-        assert!(all_close_enough);
-    }
 }

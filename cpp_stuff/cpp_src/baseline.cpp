@@ -471,23 +471,20 @@ namespace cml
     class LlamaFinalLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaFinalLayer(SimpleLlamaModelLoader *loader)
+      LlamaFinalLayer(const LlamaFinalLayerWeights *loader_weights, LlamaHyperparams params)
       {
-        llama_hparams *hparams = loader->get_hparams();
-        n_hidden = hparams->n_embd;
-        n_vocab = hparams->n_vocab;
+        n_hidden = params.n_hidden;
+        n_vocab = params.n_vocab;
 
         temp_model_norm = aligned_alloc_floats(n_hidden);
 
         float *data_temp;
 
         weights_model_norm = aligned_alloc_floats(n_hidden);
-        data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
-        memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
+        fp32s_from_fp16s(n_hidden, loader_weights->norm, weights_model_norm);
 
         weights_output_layer = aligned_alloc_floats(n_vocab * n_hidden);
-        data_temp = loader->get_tensor_float("output.weight", {n_vocab, n_hidden});
-        memcpy(weights_output_layer, data_temp, n_vocab * n_hidden * sizeof(float));
+        fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer);
       }
 
       LlamaFinalLayer(const LlamaFinalLayer &) = delete;
@@ -549,9 +546,9 @@ namespace cml
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_final_layer(SimpleLlamaModelLoader *loader)
+    create_llama_final_layer(const LlamaFinalLayerWeights *loader_weights, LlamaHyperparams params)
     {
-      return new LlamaFinalLayer(loader);
+      return new LlamaFinalLayer(loader_weights, params);
     }
   };
 };
