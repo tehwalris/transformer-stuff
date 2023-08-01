@@ -306,9 +306,9 @@ namespace cml
         weights.k = get_weight_matrix(loader_weights->self_attn_k_proj, {params.n_hidden, params.n_hidden});
         weights.v = get_weight_matrix(loader_weights->self_attn_v_proj, {params.n_hidden, params.n_hidden});
         weights.o = get_weight_matrix(loader_weights->self_attn_o_proj, {params.n_hidden, params.n_hidden});
-        weights.l1 = get_weight_matrix(loader_weights->mlp_up_proj, {params.n_ff, params.n_hidden});
+        weights.l1 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_ff, params.n_hidden});
         weights.l2 = get_weight_matrix(loader_weights->mlp_down_proj, {params.n_hidden, params.n_ff});
-        weights.l3 = get_weight_matrix(loader_weights->mlp_gate_proj, {params.n_ff, params.n_hidden});
+        weights.l3 = get_weight_matrix(loader_weights->mlp_up_proj, {params.n_ff, params.n_hidden});
         weights.attention_norm = get_1d_weights(loader_weights->input_layernorm, params.n_hidden);
         weights.ff_norm = get_1d_weights(loader_weights->post_attention_layernorm, params.n_hidden);
 
@@ -490,17 +490,8 @@ namespace cml
         weights_model_norm = aligned_alloc_floats(n_hidden);
         fp32s_from_fp16s(n_hidden, loader_weights->norm, weights_model_norm);
 
-        float *weights_output_layer_transposed = aligned_alloc_floats(n_hidden * n_vocab);
-        fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer_transposed);
-
         weights_output_layer = aligned_alloc_floats(n_vocab * n_hidden);
-        for (uint32_t i_row = 0; i_row < n_vocab; i_row++)
-        {
-          for (uint32_t i_col = 0; i_col < n_hidden; i_col++)
-          {
-            weights_output_layer[i_row * n_hidden + i_col] = weights_output_layer_transposed[i_col * n_vocab + i_row];
-          }
-        }
+        fp32s_from_fp16s(n_vocab * n_hidden, loader_weights->lm_head, weights_output_layer);
 
         new_i = 0;
       }
