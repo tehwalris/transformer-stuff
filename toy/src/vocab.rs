@@ -6,6 +6,7 @@ use std::{
 use ggml::format::TensorLoadInfo;
 use half::{f16, slice::HalfFloatSliceExt};
 use llm_base::Vocabulary;
+use safetensors::tensor::TensorView;
 
 pub struct VocabEmbeddings {
     n_hidden: usize,
@@ -31,6 +32,28 @@ impl VocabEmbeddings {
             .map(f16::from_le_bytes)
             .collect();
         let mut embeddings_f32: Vec<f32> = vec![0.0; n_hidden * n_vocab];
+        assert_eq!(embeddings_f16.len(), embeddings_f32.len());
+        embeddings_f16.convert_to_f32_slice(&mut embeddings_f32);
+
+        Self {
+            n_hidden,
+            n_vocab,
+            embeddings: embeddings_f32,
+        }
+    }
+
+    pub fn load_from_safetensors(n_hidden: usize, n_vocab: usize, tensor: TensorView) -> Self {
+        assert_eq!(tensor.shape(), &[n_vocab, n_hidden]); // This is in Safetensors order (contiguous index last)
+        assert_eq!(tensor.dtype(), safetensors::Dtype::F16);
+
+        let embeddings_f16: Vec<f16> = tensor
+            .data()
+            .into_iter()
+            .cloned()
+            .array_chunks()
+            .map(f16::from_le_bytes)
+            .collect();
+        let mut embeddings_f32: Vec<f32> = vec![0.0; n_vocab * n_hidden];
         assert_eq!(embeddings_f16.len(), embeddings_f32.len());
         embeddings_f16.convert_to_f32_slice(&mut embeddings_f32);
 

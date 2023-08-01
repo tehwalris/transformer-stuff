@@ -11,6 +11,9 @@ namespace cml
         uint32_t n_context;
         uint32_t n_heads;
         uint32_t n_ff;
+        uint32_t n_vocab;
+        uint32_t n_layers;
+        uint32_t gptq_block_size;
     };
 
     class SimpleTransformerLayer

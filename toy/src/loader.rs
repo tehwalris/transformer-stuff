@@ -3,27 +3,24 @@ use cpp_stuff_nice::{GPTQMatrix, LlamaGPTQLayerWeights, LlamaHyperparams};
 
 use safetensors::SafeTensors;
 
+use crate::vocab::VocabEmbeddings;
+
 pub struct GPTQLlamaLoader<'a> {
     tensors: SafeTensors<'a>,
     params: LlamaHyperparams,
-    gptq_block_size: usize,
 }
 
 impl<'a> GPTQLlamaLoader<'a> {
-    pub fn new(buffer: &'a [u8], params: LlamaHyperparams, gptq_block_size: usize) -> Result<Self> {
-        if gptq_block_size % 8 != 0 {
+    pub fn new(buffer: &'a [u8], params: LlamaHyperparams) -> Result<Self> {
+        if params.gptq_block_size % 8 != 0 {
             return Err(anyhow!(
                 "gptq_block_size must be a multiple of 8, got {}",
-                gptq_block_size
+                params.gptq_block_size
             ));
         }
 
         let tensors = SafeTensors::deserialize(&buffer)?;
-        Ok(Self {
-            tensors,
-            params,
-            gptq_block_size,
-        })
+        Ok(Self { tensors, params })
     }
 
     pub fn params(&self) -> &LlamaHyperparams {
@@ -68,7 +65,18 @@ impl<'a> GPTQLlamaLoader<'a> {
         ))
     }
 
-    pub fn load_gptq_matrix<'b>(&'b self, name_prefix: &str) -> Result<GPTQMatrix<'b>> {
+    pub fn load_vocab_embeddings(&self) -> Result<VocabEmbeddings> {
+        let tensor = self.tensors.tensor("model.embed_tokens.weight")?;
+        Ok(VocabEmbeddings::load_from_safetensors(
+            self.params.n_hidden.try_into().unwrap(),
+            self.params.n_vocab.try_into().unwrap(),
+            tensor,
+        ))
+    }
+
+    fn load_gptq_matrix<'b>(&'b self, name_prefix: &str) -> Result<GPTQMatrix<'b>> {
+        let gptq_block_size = self.params.gptq_block_size.try_into().unwrap();
+
         let (qweight, qweight_shape) = self.load_2d_tensor(&format!("{}.qweight", name_prefix))?;
         let (qzeros, qzeros_shape) = self.load_2d_tensor(&format!("{}.qzeros", name_prefix))?;
         let (scales, scales_shape) = self.load_2d_tensor(&format!("{}.scales", name_prefix))?;
@@ -76,19 +84,19 @@ impl<'a> GPTQLlamaLoader<'a> {
         let rows = qweight_shape.1;
         let cols = qweight_shape.0 * 8;
 
-        if rows % self.gptq_block_size != 0 || cols % self.gptq_block_size != 0 {
+        if rows % gptq_block_size != 0 || cols % gptq_block_size != 0 {
             return Err(anyhow!(
                 "GPTQ matrix {} has shape ({}, {}), which is not a multiple of gptq_block_size {}",
                 name_prefix,
                 rows,
                 cols,
-                self.gptq_block_size,
+                gptq_block_size,
             ));
         }
 
         let expected_qweight_shape = (cols / 8, rows);
-        let expected_qzeros_shape = (cols / self.gptq_block_size, rows / 8);
-        let expected_scales_shape = (cols / self.gptq_block_size, rows);
+        let expected_qzeros_shape = (cols / gptq_block_size, rows / 8);
+        let expected_scales_shape = (cols / gptq_block_size, rows);
 
         if qweight_shape != expected_qweight_shape {
             return Err(anyhow!(
@@ -118,7 +126,7 @@ impl<'a> GPTQLlamaLoader<'a> {
         Ok(GPTQMatrix::new(
             rows,
             cols,
-            self.gptq_block_size,
+            gptq_block_size,
             qweight,
             qzeros,
             scales,

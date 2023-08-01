@@ -26,6 +26,8 @@ pkgs.mkShell
     ninja
     pkg-config
     xorg.libxcb
+    openssl
+    pkgconfig
   ];
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
     "/run/opengl-driver"
