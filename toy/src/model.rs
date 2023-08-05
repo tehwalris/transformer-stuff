@@ -105,14 +105,13 @@ impl Model {
     pub fn load_gptq(
         path: impl AsRef<Path>,
         params: LlamaHyperparams,
+        n_cache: usize,
     ) -> Result<(Self, Tokenizer, VocabEmbeddings)> {
         let path = path.as_ref();
         let weights_path = path.join("gptq_model-4bit-128g.safetensors");
         let tokenizer_path = path.join("tokenizer.json");
 
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|err| anyhow!(err))?;
-
-        let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
 
         let weights_buffer = {
             let file = File::open(weights_path)?;

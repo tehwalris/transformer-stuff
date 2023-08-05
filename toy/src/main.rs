@@ -9,7 +9,7 @@ mod vocab;
 
 use std::{
     fs::File,
-    io::BufWriter,
+    io::{BufWriter, Write},
     panic::Location,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -35,20 +35,21 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
         n_layers: 32,
         gptq_block_size: 128,
     };
-    let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params)?;
+    let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
+    let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params, n_cache)?;
 
-    let input_str = "function isPrime(x) {";
+    let input_str = "Walruses";
     let input_encoding = tokenizer
         .encode(input_str, true)
         .map_err(|err| anyhow!(err))?;
 
     let mut prediction_path = vec![];
     let mut next_token_id = input_encoding.get_ids()[0];
-    for i in 1..(input_encoding.len() + 100) {
-        let next_token_str = tokenizer
-            .decode(vec![next_token_id], false)
-            .map_err(|err| anyhow!(err))?;
-        println!("next_token {}: {}", next_token_id, next_token_str);
+    for i in 1..n_cache {
+        if let Some(next_token_str) = tokenizer.id_to_token(next_token_id) {
+            print!("{}", next_token_str);
+            std::io::stdout().flush().unwrap();
+        }
 
         prediction_path.push(model.next_i());
         let hidden_in = vocab_embeddings.get_embedding(next_token_id.try_into().unwrap());
@@ -61,10 +62,14 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
             .unwrap()
             .0;
 
-        let argmax_logits_str = tokenizer
-            .decode(vec![argmax_logits.try_into().unwrap()], false)
-            .map_err(|err| anyhow!(err))?;
-        println!("argmax_logits {}: {}", argmax_logits, argmax_logits_str);
+        if argmax_logits == 13 {
+            prediction_path.clear();
+            model.retain(&[]);
+            next_token_id = input_encoding.get_ids()[0];
+            assert_eq!(model.next_i(), 0);
+            println!();
+            continue;
+        }
 
         if i < input_encoding.len() {
             next_token_id = input_encoding.get_ids()[i].try_into().unwrap();
