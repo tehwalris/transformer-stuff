@@ -132,3 +132,78 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, path::Path};
+
+    use anyhow::Result;
+    use cpp_stuff_nice::LlamaHyperparams;
+    use memmap2::MmapOptions;
+    use rand::Rng;
+
+    use crate::loader::GPTQLlamaLoader;
+
+    const MODEL_PATH: &str = "/home/philippe/Documents/llama2/Llama-2-7B-GPTQ/"; // HACK
+
+    #[test]
+    fn test_cuda_layer() -> Result<()> {
+        let params = LlamaHyperparams {
+            n_hidden: 4096,
+            n_context: 4096,
+            n_heads: 32,
+            n_ff: 11008,
+            n_vocab: 32000,
+            n_layers: 32,
+            gptq_block_size: 128,
+        };
+        let n_cache = 128;
+        let n_hidden = usize::try_from(params.n_hidden).unwrap();
+
+        let weights_path = Path::new(MODEL_PATH).join("gptq_model-4bit-128g.safetensors");
+
+        let weights_buffer = {
+            let file = File::open(weights_path)?;
+            unsafe { MmapOptions::new().map(&file)? }
+        };
+        let loader = GPTQLlamaLoader::new(&weights_buffer, params)?;
+
+        let layer_weights = loader.load_layer(0)?;
+        let mut baseline_layer =
+            cpp_stuff_nice::baseline::create_llama_layer_gptq(&layer_weights, params, n_cache);
+        let mut cuda_layer =
+            cpp_stuff_nice::cuda::create_llama_layer_gptq(&layer_weights, params, n_cache);
+
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..4 {
+            let hidden_in = (0..n_hidden).map(|_| rng.gen()).collect::<Vec<_>>();
+            let mut final_out_baseline = vec![0.0; n_hidden];
+            let mut final_out_cuda = vec![0.0; n_hidden];
+
+            baseline_layer.forward(
+                &hidden_in,
+                &mut final_out_baseline,
+                &[baseline_layer.next_i()],
+            );
+            cuda_layer.forward(&hidden_in, &mut final_out_cuda, &[cuda_layer.next_i()]);
+
+            let tolerance = 0.0001;
+            let mut all_close_enough = true;
+            for (i, (a, b)) in final_out_baseline
+                .iter()
+                .zip(final_out_cuda.iter())
+                .enumerate()
+            {
+                let close_enough = (a - b).abs() < tolerance;
+                if !close_enough {
+                    all_close_enough = false;
+                    println!("{}: {} != {} (tolerance {})", i, a, b, tolerance)
+                }
+            }
+            assert!(all_close_enough);
+        }
+
+        Ok(())
+    }
+}
