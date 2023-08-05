@@ -72,7 +72,8 @@ impl Model {
         let path_for_final_layer = path.clone();
         let final_layer_thread = thread::spawn(move || {
             let mut loader = cpp_stuff_nice::SimpleLlamaModelLoader::new(&path_for_final_layer);
-            cpp_stuff_nice::cuda::create_llama_final_layer(&mut loader)
+            // cpp_stuff_nice::cuda::create_llama_final_layer(&mut loader)
+            panic!("No backend supports a GGML final layer")
         });
 
         let n_cache = n_context * 2; // arbitrary choice
@@ -134,7 +135,7 @@ impl Model {
 
         let final_layer = {
             let final_layer_weights = loader.load_final_layer()?;
-            cpp_stuff_nice::baseline::create_llama_final_layer(&final_layer_weights, params)
+            cpp_stuff_nice::cuda::create_llama_final_layer(&final_layer_weights, params)
         };
 
         let model = Self {

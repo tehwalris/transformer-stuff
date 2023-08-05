@@ -235,6 +235,19 @@ namespace cml
       }
     }
 
+    __global__ void mul_gpu_float(const int n_rows, const int n_cols, const float *__restrict__ A, const float *__restrict__ x, float *__restrict__ y)
+    {
+      for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
+      {
+        float sum = 0;
+        for (int i_col = threadIdx.x; i_col < n_cols; i_col += blockDim.x)
+        {
+          sum += A[i_row * n_cols + i_col] * x[i_col];
+        }
+        atomicAdd(&y[i_row], float(sum));
+      }
+    }
+
     struct GPTQMatrixGPU
     {
       int rows;
@@ -559,25 +572,40 @@ namespace cml
     class LlamaFinalLayer : public SimpleTransformerLayer
     {
     public:
-      LlamaFinalLayer(SimpleLlamaModelLoader *loader)
+      LlamaFinalLayer(const LlamaFinalLayerWeights *loader_weights, LlamaHyperparams params) : params(params)
       {
-        llama_hparams *hparams = loader->get_hparams();
-        n_hidden = hparams->n_embd;
-        n_vocab = hparams->n_vocab;
+        assert(params.n_hidden % 4 == 0);
 
-        assert(n_hidden % 4 == 0);
+        auto get_weights_as_f32s = [&](const uint16_t *values, uint32_t n)
+        {
+          assert(sizeof(uint16_t) == sizeof(half));
 
-        CUDA_CHECK(cudaMallocManaged(&weights_model_norm, n_hidden * sizeof(float)));
-        float *data_temp = loader->get_tensor_float("norm.weight", {n_hidden});
-        memcpy(weights_model_norm, data_temp, n_hidden * sizeof(float));
+          float *converted_values = new float[n];
+          for (uint32_t i = 0; i < n; i++)
+          {
+            half v;
+            memcpy(&v, &values[i], sizeof(uint16_t));
+            converted_values[i] = __half2float(v);
+          }
 
-        // weights_output_layer = QuantizedMatrix(n_vocab, n_hidden);
-        // weights_output_layer.fill_from_unquantized(loader->get_tensor_float("output.weight", {n_vocab, n_hidden}));
+          float *copied_values;
+          CUDA_CHECK(cudaMalloc(&copied_values, n * sizeof(float)));
+          CUDA_CHECK(cudaMemcpy(copied_values, converted_values, n * sizeof(float), cudaMemcpyHostToDevice));
 
-        temp_hidden_in.resize(n_hidden);
-        temp_hidden_out.resize(n_vocab);
-        temp_model_norm.resize(n_hidden);
-        temp_model_norm_quantized.resize(n_hidden);
+          delete[] converted_values;
+
+          return copied_values;
+        };
+
+        weights_model_norm = get_weights_as_f32s(loader_weights->norm, params.n_hidden);
+        weights_output_layer = get_weights_as_f32s(loader_weights->lm_head, params.n_vocab * params.n_hidden);
+
+        temp_hidden_in.resize(params.n_hidden);
+        temp_hidden_out.resize(params.n_vocab);
+        temp_model_norm.resize(params.n_hidden);
+        temp_model_norm_quantized.resize(params.n_hidden);
+
+        new_i = 0;
 
         CUDA_CHECK(cudaDeviceSynchronize());
       }
@@ -587,35 +615,34 @@ namespace cml
       virtual ~LlamaFinalLayer()
       {
         CUDA_CHECK(cudaFree(weights_model_norm));
+        CUDA_CHECK(cudaFree(weights_output_layer));
       }
 
       virtual void forward(const int n_in, const float *hidden_in, const int n_out, float *hidden_out, const uint32_t n_path, const uint32_t *path) override
       {
-        assert(uint32_t(n_in) == n_hidden);
-        assert(uint32_t(n_out) == n_vocab);
+        assert(uint32_t(n_in) == params.n_hidden);
+        assert(uint32_t(n_out) == params.n_vocab);
         assert(n_path > 0);
         assert(n_path <= new_i + 1);
         assert(path[n_path - 1] == new_i);
 
         const dim3 block_size_mul_n_vocab(32, 8);
-        const dim3 grid_size_mul_n_vocab(1, ceil_div<uint32_t>(n_vocab, block_size_mul_n_vocab.y));
+        const dim3 grid_size_mul_n_vocab(1, ceil_div<uint32_t>(params.n_vocab, block_size_mul_n_vocab.y));
 
         const int block_size_scale(256);
-        const int grid_size_scale(ceil_div<uint32_t>(n_hidden, block_size_scale));
+        const int grid_size_scale(ceil_div<uint32_t>(params.n_hidden, block_size_scale));
 
         // Copy to GPU
-        thrust::copy(hidden_in, hidden_in + n_hidden, temp_hidden_in.begin());
+        thrust::copy(hidden_in, hidden_in + params.n_hidden, temp_hidden_in.begin());
 
         // Zero accumulators
         thrust::fill(temp_hidden_out.begin(), temp_hidden_out.end(), 0.0f);
 
         // Norm before output layer
-        // rms_norm_gpu_full(temp_hidden_in, temp_model_norm, thrust::device_ptr<float>(weights_model_norm));
+        rms_norm_gpu_full(temp_hidden_in, temp_model_norm, thrust::device_ptr<float>(weights_model_norm));
 
         // Output layer
-        // float unquantize_scale = quantize_gpu_full(temp_model_norm, temp_model_norm_quantized);
-        // mul_gpu<<<grid_size_mul_n_vocab, block_size_mul_n_vocab>>>(n_vocab, n_hidden, weights_output_layer.data, temp_model_norm_quantized.data().get(), temp_hidden_out.data().get());
-        // post_mul_scale_gpu<<<grid_size_scale, block_size_scale>>>(n_vocab, temp_hidden_out.data().get(), weights_output_layer.scale, unquantize_scale);
+        mul_gpu_float<<<grid_size_mul_n_vocab, block_size_mul_n_vocab>>>(params.n_vocab, params.n_hidden, weights_output_layer, temp_model_norm.data().get(), temp_hidden_out.data().get());
 
         // Copy from GPU
         thrust::copy(temp_hidden_out.begin(), temp_hidden_out.end(), hidden_out);
@@ -635,15 +662,14 @@ namespace cml
       }
 
     private:
-      uint32_t n_hidden;
-      uint32_t n_vocab;
+      LlamaHyperparams params;
       uint32_t new_i;
       thrust::device_vector<float> temp_hidden_in;
       thrust::device_vector<float> temp_hidden_out;
       thrust::device_vector<float> temp_model_norm;
       thrust::device_vector<char4> temp_model_norm_quantized;
       float *weights_model_norm;
-      // QuantizedMatrix weights_output_layer;
+      float *weights_output_layer;
     };
 
     __attribute__((visibility("default")))
@@ -655,9 +681,9 @@ namespace cml
 
     __attribute__((visibility("default")))
     SimpleTransformerLayer *
-    create_llama_final_layer(SimpleLlamaModelLoader *loader)
+    create_llama_final_layer(const LlamaFinalLayerWeights *loader_weights, LlamaHyperparams params)
     {
-      return new LlamaFinalLayer(loader);
+      return new LlamaFinalLayer(loader_weights, params);
     }
   };
 };

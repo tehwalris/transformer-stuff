@@ -227,8 +227,16 @@ pub mod cuda {
         }
     }
 
-    pub fn create_llama_final_layer(loader: &mut SimpleLlamaModelLoader) -> SimpleTransformerLayer {
-        unsafe { SimpleTransformerLayer(cml_cuda_create_llama_final_layer(&mut loader.0)) }
+    pub fn create_llama_final_layer(
+        loader_weights: &LlamaFinalLayerWeights,
+        params: LlamaHyperparams,
+    ) -> SimpleTransformerLayer {
+        unsafe {
+            SimpleTransformerLayer(cml_cuda_create_llama_final_layer(
+                &loader_weights.inner,
+                params,
+            ))
+        }
     }
 }
 

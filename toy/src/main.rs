@@ -37,14 +37,14 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
     };
     let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params)?;
 
-    let input_str = "Cows";
+    let input_str = "function isPrime(x) {";
     let input_encoding = tokenizer
         .encode(input_str, true)
         .map_err(|err| anyhow!(err))?;
 
     let mut prediction_path = vec![];
     let mut next_token_id = input_encoding.get_ids()[0];
-    for i in 1..(input_encoding.len() + 10) {
+    for i in 1..(input_encoding.len() + 100) {
         let next_token_str = tokenizer
             .decode(vec![next_token_id], false)
             .map_err(|err| anyhow!(err))?;
