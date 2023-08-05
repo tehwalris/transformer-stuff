@@ -141,7 +141,7 @@ impl Model {
             n_hidden: params.n_hidden.try_into().unwrap(),
             n_vocab: params.n_vocab.try_into().unwrap(),
             n_context: params.n_context.try_into().unwrap(),
-            n_cache: params.n_context.try_into().unwrap(),
+            n_cache: n_cache.try_into().unwrap(),
             layers,
             final_layer,
         };
