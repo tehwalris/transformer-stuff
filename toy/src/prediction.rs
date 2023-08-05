@@ -9,7 +9,9 @@ use crate::{
     tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
+use cpp_stuff_nice::LlamaHyperparams;
 use llm_base::{TokenId, Vocabulary};
+use tokenizers::{Decoder, Tokenizer};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -54,7 +56,7 @@ fn get_prediction_path<'a>(
     None
 }
 
-fn children_from_logits(logits: &[f32], vocab: &Vocabulary) -> InferenceTreeChildren {
+fn children_from_logits(logits: &[f32], tokenizer: &Tokenizer) -> InferenceTreeChildren {
     let mut probabilities: Vec<f64> = logits
         .iter()
         .map(|&log_probability| (log_probability as f64).exp())
@@ -70,7 +72,11 @@ fn children_from_logits(logits: &[f32], vocab: &Vocabulary) -> InferenceTreeChil
             .enumerate()
             .map(|(i, probability)| InferenceTreeNode {
                 token_id: TokenId::try_from(i).unwrap(),
-                token: vocab.token(i).to_vec(),
+                token: tokenizer
+                    .id_to_token(i.try_into().unwrap())
+                    .unwrap_or_default()
+                    .replace("▁", " ") // not normal underscore
+                    .into_bytes(),
                 probability,
                 prediction_id: None,
                 children: None,
@@ -81,7 +87,7 @@ fn children_from_logits(logits: &[f32], vocab: &Vocabulary) -> InferenceTreeChil
 
 fn try_predict_next(
     model: &mut Model,
-    vocab: &Vocabulary,
+    tokenizer: &Tokenizer,
     vocab_embeddings: &VocabEmbeddings,
     inference_tree: &Arc<Mutex<InferenceTree>>,
     focused_path: &[TokenId],
@@ -101,7 +107,7 @@ fn try_predict_next(
 
     let hidden_in = vocab_embeddings.get_embedding(target_node_clone.token_id.try_into().unwrap());
     let logits = model.predict(&hidden_in, &prediction_path);
-    let children = children_from_logits(&logits, vocab);
+    let children = children_from_logits(&logits, tokenizer);
 
     {
         let mut inference_tree = inference_tree.lock().unwrap();
@@ -188,17 +194,20 @@ pub fn prediction_thread_main(
     inference_tree: Arc<Mutex<InferenceTree>>,
     focused_path: Arc<Mutex<Vec<TokenId>>>,
 ) {
-    let mut layer_backends = vec![];
-    for _ in 0..16 {
-        layer_backends.push(Backend::Cuda);
-    }
-    for _ in 0..16 {
-        layer_backends.push(Backend::Hip);
-    }
+    let params = LlamaHyperparams {
+        n_hidden: 4096,
+        n_context: 4096,
+        n_heads: 32,
+        n_ff: 11008,
+        n_vocab: 32000,
+        n_layers: 32,
+        gptq_block_size: 128,
+    };
+    let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
 
     println!("Loading model...");
-    let (vocab, vocab_embeddings) = load_vocab(&model_path);
-    let mut model = Model::load(&model_path, &layer_backends, true);
+    let (mut model, tokenizer, vocab_embeddings) =
+        Model::load_gptq(model_path, params, n_cache).unwrap();
     println!("Done loading model");
 
     loop {
@@ -215,7 +224,7 @@ pub fn prediction_thread_main(
 
         let did_predict = try_predict_next(
             &mut model,
-            &vocab,
+            &tokenizer,
             &vocab_embeddings,
             &inference_tree,
             &focused_path,

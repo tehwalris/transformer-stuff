@@ -38,17 +38,14 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
     let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
     let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params, n_cache)?;
 
-    let input_str = "The average cost of a wedding is";
+    let input_str = "After locking up for the night, Jane";
     let input_encoding = tokenizer
         .encode(input_str, true)
         .map_err(|err| anyhow!(err))?;
 
     let mut prediction_path = vec![];
     let mut next_token_id = input_encoding.get_ids()[0];
-    let mut i_input = 0;
     for i in 1..n_cache {
-        i_input += 1;
-
         if let Some(next_token_str) = tokenizer.id_to_token(next_token_id) {
             print!("{}", next_token_str);
             std::io::stdout().flush().unwrap();
@@ -65,18 +62,8 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
             .unwrap()
             .0;
 
-        if i == 32 {
-            prediction_path.clear();
-            model.retain(&[]);
-            next_token_id = input_encoding.get_ids()[0];
-            i_input = 0;
-            assert_eq!(model.next_i(), 0);
-            println!();
-            continue;
-        }
-
-        if i_input < input_encoding.len() {
-            next_token_id = input_encoding.get_ids()[i_input].try_into().unwrap();
+        if i < input_encoding.len() {
+            next_token_id = input_encoding.get_ids()[i].try_into().unwrap();
         } else {
             next_token_id = argmax_logits.try_into().unwrap();
         }
@@ -105,9 +92,7 @@ fn main() -> Result<()> {
         .build();
     tracing_subscriber::registry().with(chrome_layer).init();
 
-    test_thing(model_path).unwrap();
-
-    return Ok(());
+    // test_thing(model_path).unwrap();
 
     let bos_token_id = 1;
     let inference_tree = Arc::new(Mutex::new(InferenceTree::new(bos_token_id)));
