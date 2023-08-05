@@ -74,6 +74,35 @@ namespace cml
       }
     }
 
+    void apply_rope_baseline(const LlamaHyperparams &params, uint32_t position, float *vec)
+    {
+      assert(params.n_hidden % params.n_heads == 0);
+      assert((params.n_hidden / params.n_heads) % 2 == 0);
+
+      float theta_scale = powf(10000.0, -2.0f / (float(params.n_hidden) / float(params.n_heads)));
+
+      float theta = float(position);
+      for (uint32_t i = 0; i < params.n_hidden; i += 2)
+      {
+        if (i % (params.n_hidden / params.n_heads) == 0)
+        {
+          // RoPE is applied separately to each head
+          theta = float(position);
+        }
+
+        float cos_theta = std::cos(theta);
+        float sin_theta = std::sin(theta);
+
+        theta *= theta_scale;
+
+        float old_0 = vec[i];
+        float old_1 = vec[i + 1];
+
+        vec[i] = old_0 * cos_theta - old_1 * sin_theta;
+        vec[i + 1] = old_0 * sin_theta + old_1 * cos_theta;
+      }
+    }
+
     __global__ void attention_dot_gpu(uint32_t n_hidden, uint32_t n_heads, uint32_t n_path, const uint32_t *path, float *cache_k, float *new_q, float *attention)
     {
       uint32_t i_path = blockIdx.z;
@@ -414,6 +443,35 @@ namespace cml
         state.cache_k.resize(n_cache * params.n_hidden);
         state.cache_v.resize(n_cache * params.n_hidden);
         state.new_i = 0;
+
+        {
+          float *temp = new float[params.n_hidden];
+          for (uint32_t i = 0; i < params.n_hidden; i++)
+          {
+            temp[i] = float(i);
+          }
+
+          float *temp_cuda;
+          CUDA_CHECK(cudaMalloc(&temp_cuda, params.n_hidden * sizeof(float)));
+          CUDA_CHECK(cudaMemcpy(temp_cuda, temp, params.n_hidden * sizeof(float), cudaMemcpyHostToDevice));
+
+          int position = 100;
+          // apply_rope_baseline(params, position, temp);
+          const dim3 block_size_rope(64, 1);
+          const dim3 grid_size_rope(ceil_div<uint32_t>(params.n_hidden / params.n_heads / 2, block_size_rope.x), params.n_heads);
+          printf("grid_size_rope: %d %d\n", grid_size_rope.x, grid_size_rope.y);
+          rope_gpu<<<grid_size_rope, block_size_rope>>>(params.n_hidden, params.n_heads, position, temp_cuda);
+
+          CUDA_CHECK(cudaMemcpy(temp, temp_cuda, params.n_hidden * sizeof(float), cudaMemcpyDeviceToHost));
+          CUDA_CHECK(cudaDeviceSynchronize());
+
+          for (uint32_t i = 0; i < params.n_hidden; i++)
+          {
+            printf("%f ", temp[i]);
+          }
+          printf("\n");
+          exit(1);
+        }
 
         CUDA_CHECK(cudaDeviceSynchronize());
       }
