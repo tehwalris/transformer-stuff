@@ -20,8 +20,6 @@ namespace cml
 {
   namespace cuda
   {
-    const uint32_t n_ff_multiple = 256;
-
     __global__ void mul_gpu(int n_rows, int n_cols, char4 const *__restrict__ A, char4 const *__restrict__ x, float *__restrict__ y)
     {
       for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
@@ -199,7 +197,7 @@ namespace cml
     {
       assert(in.size() == out.size());
 
-      const float eps = 1e-6f;
+      const float eps = 5e-6f;
 
       float sq_norm = thrust::inner_product(in.begin(), in.end(), in.begin(), 0.0f);
       thrust::transform(in.begin(), in.end(),

@@ -9,12 +9,11 @@ namespace cml
   namespace baseline
   {
 
-    const uint32_t n_ff_multiple = 256;
     const uint32_t cache_line_bytes = 64;
 
     void rms_norm(uint32_t n, const float *in, float *out)
     {
-      float eps = 1e-6;
+      float eps = 5e-6;
 
       float sum = 0.0f;
       for (uint32_t i = 0; i < n; i++)
