@@ -322,23 +322,20 @@ namespace cml
 
     struct Temp
     {
-      thrust::device_vector<float> hidden_in;                  // n_hidden
-      thrust::device_vector<float> hidden_out;                 // n_hidden
-      thrust::device_vector<float> norm_residual;              // n_hidden
-      thrust::device_vector<char4> norm_residual_quantized;    // n_hidden
-      thrust::device_vector<float> q;                          // n_hidden
-      thrust::device_vector<float> k;                          // n_hidden
-      thrust::device_vector<float> v;                          // n_hidden
-      thrust::device_vector<float> o;                          // n_hidden
-      thrust::device_vector<float> attention;                  // n_context * n_heads
-      thrust::device_vector<float> attention_sum;              // n_context
-      thrust::device_vector<float> attention_result;           // n_hidden
-      thrust::device_vector<char4> attention_result_quantized; // n_hidden
-      thrust::device_vector<float> l1;                         // n_ff
-      thrust::device_vector<float> l2;                         // n_hidden
-      thrust::device_vector<float> l3;                         // n_ff
-      thrust::device_vector<char4> l3_quantized;               // n_ff
-      thrust::device_vector<uint32_t> path;                    // n_context
+      thrust::device_vector<float> hidden_in;        // n_hidden
+      thrust::device_vector<float> hidden_out;       // n_hidden
+      thrust::device_vector<float> norm_residual;    // n_hidden
+      thrust::device_vector<float> q;                // n_hidden
+      thrust::device_vector<float> k;                // n_hidden
+      thrust::device_vector<float> v;                // n_hidden
+      thrust::device_vector<float> o;                // n_hidden
+      thrust::device_vector<float> attention;        // n_context * n_heads
+      thrust::device_vector<float> attention_sum;    // n_context
+      thrust::device_vector<float> attention_result; // n_hidden
+      thrust::device_vector<float> l1;               // n_ff
+      thrust::device_vector<float> l2;               // n_hidden
+      thrust::device_vector<float> l3;               // n_ff
+      thrust::device_vector<uint32_t> path;          // n_context
     };
 
     struct State
@@ -404,7 +401,6 @@ namespace cml
         temp.hidden_in.resize(params.n_hidden);
         temp.hidden_out.resize(params.n_hidden);
         temp.norm_residual.resize(params.n_hidden);
-        temp.norm_residual_quantized.resize(params.n_hidden / 4);
         temp.q.resize(params.n_hidden);
         temp.k.resize(params.n_hidden);
         temp.v.resize(params.n_hidden);
@@ -412,11 +408,9 @@ namespace cml
         temp.attention.resize(params.n_context * params.n_heads);
         temp.attention_sum.resize(params.n_context);
         temp.attention_result.resize(params.n_hidden);
-        temp.attention_result_quantized.resize(params.n_hidden / 4);
         temp.l1.resize(params.n_ff);
         temp.l2.resize(params.n_hidden);
         temp.l3.resize(params.n_ff);
-        temp.l3_quantized.resize(params.n_ff / 4);
         temp.path.resize(params.n_context);
 
         state.cache_k.resize(n_cache * params.n_hidden);
@@ -603,7 +597,6 @@ namespace cml
         temp_hidden_in.resize(params.n_hidden);
         temp_hidden_out.resize(params.n_vocab);
         temp_model_norm.resize(params.n_hidden);
-        temp_model_norm_quantized.resize(params.n_hidden);
 
         new_i = 0;
 
@@ -667,7 +660,6 @@ namespace cml
       thrust::device_vector<float> temp_hidden_in;
       thrust::device_vector<float> temp_hidden_out;
       thrust::device_vector<float> temp_model_norm;
-      thrust::device_vector<char4> temp_model_norm_quantized;
       float *weights_model_norm;
       float *weights_output_layer;
     };
