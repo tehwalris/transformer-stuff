@@ -38,7 +38,7 @@ fn get_prediction_path<'a>(
     }
 
     if let Some(children) = &nodes_on_path.last().unwrap().children {
-        for &child_index in &children.indices_by_interval_size[..10] {
+        for &child_index in &children.indices_by_interval_size[..1] {
             let child = &children.nodes[child_index];
             if child.prediction_id.is_none() {
                 let prediction_path = nodes_on_path
@@ -159,7 +159,7 @@ fn clear_most_cache(
 
     if focused_nodes.len() == focused_path.len() {
         if let Some(children) = &focused_nodes.last().unwrap().children {
-            for &child_index in &children.indices_by_interval_size[..10] {
+            for &child_index in &children.indices_by_interval_size[..1] {
                 let child = &children.nodes[child_index];
                 if let Some(prediction_id) = child.prediction_id {
                     should_retain[usize::try_from(prediction_id).unwrap()] = true;
