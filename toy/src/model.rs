@@ -108,7 +108,10 @@ impl Model {
         n_cache: usize,
     ) -> Result<(Self, Tokenizer, VocabEmbeddings)> {
         let path = path.as_ref();
-        let weights_path = path.join("gptq_model-4bit-128g.safetensors");
+        let weights_path = path.join(format!(
+            "gptq_model-4bit-{}g.safetensors",
+            params.gptq_block_size
+        ));
         let tokenizer_path = path.join("tokenizer.json");
 
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|err| anyhow!(err))?;

@@ -201,7 +201,7 @@ pub fn prediction_thread_main(
         n_ff: 11008,
         n_vocab: 32000,
         n_layers: 32,
-        gptq_block_size: 128,
+        gptq_block_size: 32,
     };
     let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
 

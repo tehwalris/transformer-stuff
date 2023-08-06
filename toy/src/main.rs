@@ -33,7 +33,7 @@ fn test_thing(path: impl AsRef<Path>) -> Result<()> {
         n_ff: 11008,
         n_vocab: 32000,
         n_layers: 32,
-        gptq_block_size: 128,
+        gptq_block_size: 32,
     };
     let n_cache = 128; // HACK small for testing CUDA layers with little VRAM
     let (mut model, tokenizer, vocab_embeddings) = Model::load_gptq(path, params, n_cache)?;
@@ -93,6 +93,7 @@ fn main() -> Result<()> {
     tracing_subscriber::registry().with(chrome_layer).init();
 
     // test_thing(model_path).unwrap();
+    // return Ok(());
 
     let bos_token_id = 1;
     let inference_tree = Arc::new(Mutex::new(InferenceTree::new(bos_token_id)));
