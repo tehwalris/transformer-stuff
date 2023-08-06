@@ -36,6 +36,7 @@ namespace cml
     uint32_t *qweight; // Packed 4 bit signed integers (uint32_t shape: [cols / 8][rows])
     uint32_t *qzeros;  // Packed 4 bit signed integers (uint32_t shape: [cols / block_size][rows / 8])
     uint16_t *scales;  // 16 bit floats (uint16_t shape: [cols / 8][rows])
+    uint32_t *g_idx;   // 32 bit (signed, but never negative) integers (uint32_t shape: [cols])
   };
 
   struct LlamaGPTQLayerWeights

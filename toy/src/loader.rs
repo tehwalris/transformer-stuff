@@ -98,6 +98,8 @@ impl<'a> GPTQLlamaLoader<'a> {
         let (qweight, qweight_shape) = self.load_2d_tensor(&format!("{}.qweight", name_prefix))?;
         let (qzeros, qzeros_shape) = self.load_2d_tensor(&format!("{}.qzeros", name_prefix))?;
         let (scales, scales_shape) = self.load_2d_tensor(&format!("{}.scales", name_prefix))?;
+        // TODO detect when g_idx is not enabled
+        let (g_idx, g_idx_len) = self.load_1d_tensor(&format!("{}.g_idx", name_prefix))?;
 
         let rows = qweight_shape.1;
         let cols = qweight_shape.0 * 8;
@@ -115,6 +117,7 @@ impl<'a> GPTQLlamaLoader<'a> {
         let expected_qweight_shape = (cols / 8, rows);
         let expected_qzeros_shape = (cols / gptq_block_size, rows / 8);
         let expected_scales_shape = (cols / gptq_block_size, rows);
+        let expected_g_idx_len = cols;
 
         if qweight_shape != expected_qweight_shape {
             return Err(anyhow!(
@@ -140,6 +143,14 @@ impl<'a> GPTQLlamaLoader<'a> {
                 scales_shape
             ));
         }
+        if g_idx_len != expected_g_idx_len {
+            return Err(anyhow!(
+                "Expected {}.g_idx length {}, got {}",
+                name_prefix,
+                expected_g_idx_len,
+                g_idx_len
+            ));
+        }
 
         Ok(GPTQMatrix::new(
             rows,
@@ -148,6 +159,7 @@ impl<'a> GPTQLlamaLoader<'a> {
             qweight,
             qzeros,
             scales,
+            g_idx,
         ))
     }
 

@@ -216,18 +216,22 @@ namespace cml
       size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
       size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
       size_t scales_bytes = (old_mat.cols / old_mat.block_size) * old_mat.rows * sizeof(uint16_t);
+      size_t g_idx_bytes = old_mat.cols * sizeof(uint32_t);
 
       uint32_t *qweight = (uint32_t *)malloc(qweight_bytes);
       uint32_t *qzeros = (uint32_t *)malloc(qzeros_bytes);
       uint16_t *scales = (uint16_t *)malloc(scales_bytes);
+      uint32_t *g_idx = (uint32_t *)malloc(g_idx_bytes);
 
       memcpy(qweight, old_mat.qweight, qweight_bytes);
       memcpy(qzeros, old_mat.qzeros, qzeros_bytes);
       memcpy(scales, old_mat.scales, scales_bytes);
+      memcpy(g_idx, old_mat.g_idx, g_idx_bytes);
 
       new_mat.qweight = qweight;
       new_mat.qzeros = qzeros;
       new_mat.scales = scales;
+      new_mat.g_idx = g_idx;
 
       return new_mat;
     }
@@ -237,10 +241,12 @@ namespace cml
       free(mat.qweight);
       free(mat.qzeros);
       free(mat.scales);
+      free(mat.g_idx);
 
       mat.qweight = nullptr;
       mat.qzeros = nullptr;
       mat.scales = nullptr;
+      mat.g_idx = nullptr;
     }
 
     struct Weights

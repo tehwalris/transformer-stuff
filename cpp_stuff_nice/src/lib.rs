@@ -50,6 +50,7 @@ impl<'a> GPTQMatrix<'a> {
         qweight: &'a [u8],
         qzeros: &'a [u8],
         scales: &'a [u8],
+        g_idx: &'a [u8],
     ) -> Self {
         assert!(block_size % 8 == 0);
         assert!(rows % block_size == 0);
@@ -57,6 +58,7 @@ impl<'a> GPTQMatrix<'a> {
         assert!(qweight.len() == 4 * cols / 8 * rows);
         assert!(qzeros.len() == 4 * cols / block_size * rows / 8);
         assert!(scales.len() == 2 * cols / block_size * rows);
+        assert!(g_idx.len() == 4 * cols);
         GPTQMatrix {
             inner: cml_GPTQMatrix {
                 rows: rows.try_into().unwrap(),
@@ -65,6 +67,7 @@ impl<'a> GPTQMatrix<'a> {
                 qweight: qweight.as_ptr() as *mut u32,
                 qzeros: qzeros.as_ptr() as *mut u32,
                 scales: scales.as_ptr() as *mut u16,
+                g_idx: g_idx.as_ptr() as *mut u32,
             },
             phantom: PhantomData,
         }

@@ -255,6 +255,7 @@ namespace cml
       uint32_t *qweight;
       uint32_t *qzeros;
       half *scales;
+      uint32_t *g_idx;
     };
 
     void mul_gpu_full(const GPTQMatrixGPU &A, const float *__restrict__ x, float *__restrict__ y)
@@ -282,14 +283,17 @@ namespace cml
       size_t qweight_bytes = (old_mat.cols / 8) * old_mat.rows * sizeof(uint32_t);
       size_t qzeros_bytes = (old_mat.cols / old_mat.block_size) * (old_mat.rows / 8) * sizeof(uint32_t);
       size_t scales_bytes = (old_mat.cols / old_mat.block_size) * old_mat.rows * sizeof(half);
+      size_t g_idx_bytes = old_mat.cols * sizeof(uint32_t);
 
       CUDA_CHECK(cudaMalloc(&new_mat.qweight, qweight_bytes));
       CUDA_CHECK(cudaMalloc(&new_mat.qzeros, qzeros_bytes));
       CUDA_CHECK(cudaMalloc(&new_mat.scales, scales_bytes));
+      CUDA_CHECK(cudaMalloc(&new_mat.g_idx, g_idx_bytes));
 
       CUDA_CHECK(cudaMemcpy(new_mat.qweight, old_mat.qweight, qweight_bytes, cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(new_mat.qzeros, old_mat.qzeros, qzeros_bytes, cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(new_mat.scales, old_mat.scales, scales_bytes, cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(new_mat.g_idx, old_mat.g_idx, g_idx_bytes, cudaMemcpyHostToDevice));
 
       return new_mat;
     }
@@ -299,10 +303,12 @@ namespace cml
       CUDA_CHECK(cudaFree(mat.qweight));
       CUDA_CHECK(cudaFree(mat.qzeros));
       CUDA_CHECK(cudaFree(mat.scales));
+      CUDA_CHECK(cudaFree(mat.g_idx));
 
       mat.qweight = nullptr;
       mat.qzeros = nullptr;
       mat.scales = nullptr;
+      mat.g_idx = nullptr;
     }
 
     struct Weights
