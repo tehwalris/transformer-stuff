@@ -206,7 +206,9 @@ namespace cml
                         ScaledMulFunctor(1.0f / std::sqrt(sq_norm / float(in.size()) + eps)));
     }
 
-    __global__ void mul_gpu_new(const int n_rows, const int n_cols, const int block_size, const uint32_t *__restrict__ qweight, const uint32_t *__restrict__ qzeros, const half *__restrict__ scales, const float *__restrict__ x, float *__restrict__ y)
+    __global__ void mul_gpu_new(const int n_rows, const int n_cols, const int block_size,
+                                const uint32_t *__restrict__ qweight, const uint32_t *__restrict__ qzeros, const half *__restrict__ scales, const uint32_t *__restrict__ g_idx,
+                                const float *__restrict__ x, float *__restrict__ y)
     {
       for (int i_row = blockIdx.y * blockDim.y + threadIdx.y; i_row < n_rows; i_row += blockDim.y * gridDim.y)
       {
@@ -214,8 +216,9 @@ namespace cml
         for (int i_col = threadIdx.x; i_col < n_cols; i_col += blockDim.x)
         {
           uint32_t i_qweight = (i_col / 8) * n_rows + i_row;
-          uint32_t i_qzeros = (i_col / block_size) * (n_rows / 8) + (i_row / 8);
-          uint32_t i_scales = (i_col / block_size) * n_rows + i_row;
+          uint32_t i_group = g_idx[i_col];
+          uint32_t i_qzeros = i_group * (n_rows / 8) + (i_row / 8);
+          uint32_t i_scales = i_group * n_rows + i_row;
 
           float scale = __half2float(scales[i_scales]);
 
@@ -266,7 +269,7 @@ namespace cml
       const dim3 block_size(32, 8);
       const dim3 grid_size(1, ceil_div<uint32_t>(A.rows, block_size.y));
 
-      mul_gpu_new<<<grid_size, block_size>>>(A.rows, A.cols, A.block_size, A.qweight, A.qzeros, A.scales, x, y);
+      mul_gpu_new<<<grid_size, block_size>>>(A.rows, A.cols, A.block_size, A.qweight, A.qzeros, A.scales, A.g_idx, x, y);
     }
 
     GPTQMatrixGPU copy_gptq_matrix_gpu(const GPTQMatrix &old_mat)

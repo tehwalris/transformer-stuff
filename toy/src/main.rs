@@ -129,7 +129,8 @@ mod tests {
 
     use crate::loader::GPTQLlamaLoader;
 
-    const MODEL_PATH: &str = "/home/philippe/Documents/llama2/Llama-2-7B-GPTQ/"; // HACK
+    const MODEL_PATH: &str =
+        "/home/philippe/Documents/llama2/Llama-2-7B-GPTQ-gptq-4bit-128g-actorder_True/"; // HACK
 
     #[test]
     fn test_cuda_layer() -> Result<()> {

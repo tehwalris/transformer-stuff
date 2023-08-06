@@ -63,8 +63,9 @@ namespace cml
       for (uint32_t i_col = 0; i_col < mat.cols; i_col++)
       {
         uint32_t i_qweight = (i_col / 8) * mat.rows + i_row;
-        uint32_t i_qzeros = (i_col / mat.block_size) * (mat.rows / 8) + (i_row / 8);
-        uint32_t i_scales = (i_col / mat.block_size) * mat.rows + i_row;
+        uint32_t i_group = mat.g_idx[i_col];
+        uint32_t i_qzeros = i_group * (mat.rows / 8) + (i_row / 8);
+        uint32_t i_scales = i_group * mat.rows + i_row;
 
         float scale = fp32_from_fp16(mat.scales[i_scales]);
 
