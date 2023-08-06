@@ -1,4 +1,5 @@
 use std::{
+    io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -9,7 +10,7 @@ use crate::{
     tree::{InferenceTree, InferenceTreeChildren, InferenceTreeNode},
     vocab::{load_vocab, VocabEmbeddings},
 };
-use llm_base::{TokenId, Vocabulary};
+use llm_base::{TokenId, TokenUtf8Buffer, Vocabulary};
 
 fn get_prediction_path<'a>(
     inference_tree: &'a InferenceTree,
@@ -200,6 +201,44 @@ pub fn prediction_thread_main(
     let (vocab, vocab_embeddings) = load_vocab(&model_path);
     let mut model = Model::load(&model_path, &layer_backends, true);
     println!("Done loading model");
+
+    {
+        let input_str =
+            " After locking up for the night, Jane and I went to the pub. It was a rustic place, but charming. We had a few drinks and caught up with a few friends who stopped by.\nAfter a few drinks.";
+        let input_encoding: Vec<_> = vocab
+            .tokenize(input_str, true)
+            .unwrap()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect();
+
+        let mut prediction_path = vec![];
+        let mut next_token_id = input_encoding[0];
+        let mut token_buffer = TokenUtf8Buffer::new();
+        for i in 1..model.n_cache {
+            if let Some(s) = token_buffer.push(vocab.token(next_token_id.try_into().unwrap())) {
+                print!("{}", s);
+                std::io::stdout().flush().unwrap();
+            }
+
+            prediction_path.push(model.next_i());
+            let hidden_in = vocab_embeddings.get_embedding(next_token_id.try_into().unwrap());
+            let logits = model.predict(hidden_in, &prediction_path);
+
+            let argmax_logits = logits
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .unwrap()
+                .0;
+
+            if i < input_encoding.len() {
+                next_token_id = input_encoding[i].try_into().unwrap();
+            } else {
+                next_token_id = argmax_logits.try_into().unwrap();
+            }
+        }
+    }
 
     loop {
         let focused_path = focused_path.lock().unwrap().clone();
