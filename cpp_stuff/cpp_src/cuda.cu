@@ -197,7 +197,7 @@ namespace cml
     {
       assert(in.size() == out.size());
 
-      const float eps = 5e-6f;
+      const float eps = 1e-5f;
 
       float sq_norm = thrust::inner_product(in.begin(), in.end(), in.begin(), 0.0f);
       thrust::transform(in.begin(), in.end(),

@@ -13,7 +13,7 @@ namespace cml
 
     void rms_norm(uint32_t n, const float *in, float *out)
     {
-      float eps = 5e-6;
+      float eps = 1e-5;
 
       float sum = 0.0f;
       for (uint32_t i = 0; i < n; i++)
